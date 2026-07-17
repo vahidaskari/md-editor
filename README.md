@@ -1,0 +1,44 @@
+<div align="center">
+
+# ✎ MD Editor
+
+**A fast, no-nonsense markdown editor that runs entirely in your browser.**
+
+No build step. No server. No account. Just open it and write.
+
+[**→ Try it live**](https://vahidaskari.github.io/md-editor/)
+
+</div>
+
+<!-- Tip: drop a screenshot at docs/screenshot.png and uncomment the line below.
+![MD Editor](docs/screenshot.png)
+-->
+
+---
+
+## Features
+
+- **Live preview** — renders as you type, in a resizable split view
+- **Editable preview** — type directly into the rendered side; it syncs back to markdown
+- **Formatting toolbar** — select text or right-click inside the preview for bold, italic, code, headings, lists, links and tables
+- **Find & replace** — `Ctrl/Cmd + F`, with match count and undo support
+- **Checklists** — `- [ ]` / `- [x]` render as real checkboxes you can tick
+- **Tables** — insert with a custom row/column count
+- **Dark & light themes** — remembered between visits
+- **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew
+- **Sync scroll** — the preview follows the editor (toggleable)
+- **Copy as** — Markdown, HTML, or plain text
+- **Import / export** — open `.md` files, drag & drop them in, save `.md`, or export a PDF
+- **Autosave** — your document is kept in the browser as you write
+- **Smart lists** — press Enter and the next bullet, number or checkbox continues automatically
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl/Cmd + S` | Save as `.md` |
+| `Ctrl/Cmd + F` | Find & replace |
+| `Ctrl/Cmd + Z` | Undo |
+| `Enter` | Continue the current list / checklist |
+| `Tab` | Insert spaces |
+| `Esc` | Close the find bar or a dialog |
