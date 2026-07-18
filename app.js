@@ -52,6 +52,19 @@ function inline(t){
   return t;
 }
 
+const TASK_ITEM=/^\[([ xX])\]\s+(.*)$/;
+const isTaskItem=item=>TASK_ITEM.test(item);
+
+// one <li>, rendered as a checkbox when the item is a GFM task ("- [x] text")
+function listItemHTML(item){
+  const m=item.match(TASK_ITEM);
+  if(!m) return `<li>${inline(escapeHtml(item))}</li>`;
+  const checked=m[1].toLowerCase()==="x" ? " checked" : "";
+  // aria-label: a bare checkbox has no accessible name for screen readers
+  const label=attrValue(escapeHtml(m[2].trim() || "Task"));
+  return `<li class="task-item"><input type="checkbox"${checked} aria-label="${label}"> ${inline(escapeHtml(m[2]))}</li>`;
+}
+
 function render(src){
   const lines = src
     .replace(/<!--[\s\S]*?-->/g,"")   // HTML comments are hidden, as in real markdown
@@ -100,17 +113,8 @@ function render(src){
       while(i<lines.length && /^\s*[-*+]\s+/.test(lines[i])){
         items.push(lines[i].replace(/^\s*[-*+]\s+/,"")); i++;
       }
-      const hasTask=items.some(it=>/^\[[ xX]\]\s+/.test(it));
-      html+=`<ul${hasTask?' class="task-list"':''}>`+items.map(it=>{
-        const m=it.match(/^\[([ xX])\]\s+(.*)$/);
-        if(m){
-          const checked=m[1].toLowerCase()==="x";
-          // aria-label: a bare checkbox has no accessible name for screen readers
-          const label=attrValue(escapeHtml(m[2].trim() || "Task"));
-          return `<li class="task-item"><input type="checkbox"${checked?" checked":""} aria-label="${label}"> ${inline(escapeHtml(m[2]))}</li>`;
-        }
-        return `<li>${inline(escapeHtml(it))}</li>`;
-      }).join("")+"</ul>";
+      const hasTask=items.some(isTaskItem);
+      html+=`<ul${hasTask?' class="task-list"':''}>`+items.map(listItemHTML).join("")+"</ul>";
       continue;
     }
     // ordered list
@@ -175,99 +179,88 @@ function toast(msg,isErr){
   setTimeout(()=>{ t.classList.add("out"); setTimeout(()=>t.remove(),250); },2200);
 }
 
-function confirmModal(message,okLabel){
+/* Every dialog shares the same shell: a backdrop, Escape and click-outside to
+   dismiss, Enter to confirm, and Tab cycling trapped inside. Callers supply only
+   the body markup, how to read a result, and what to focus. */
+function openModal({body,okLabel="OK",cancelValue,readResult,onOpen}){
   return new Promise(resolve=>{
     const back=document.createElement("div");
     back.className="modal-backdrop";
-    back.innerHTML=`<div class="modal"><p></p><div class="actions">`+
+    back.innerHTML=`<div class="modal">${body}<div class="actions">`+
       `<button class="cancel">Cancel</button>`+
-      `<button class="primary">${okLabel||"OK"}</button></div></div>`;
-    back.querySelector("p").textContent=message;
+      `<button class="primary">${okLabel}</button></div></div>`;
     document.body.appendChild(back);
+
     const close=v=>{ back.remove(); document.removeEventListener("keydown",onKey); resolve(v); };
+    const cancel=()=>close(cancelValue);
+    const confirm=()=>close(readResult(back));
     const onKey=e=>{
-      if(e.key==="Escape")close(false);
-      else if(e.key==="Enter")close(!document.activeElement || !document.activeElement.classList.contains("cancel"));
-      else if(e.key==="Tab"){ // trap focus between the two buttons
-        const f=[...back.querySelectorAll("button")];
+      if(e.key==="Escape"){ cancel(); return; }
+      if(e.key==="Enter"){
+        // Enter on the Cancel button should cancel, not confirm
+        if(document.activeElement && document.activeElement.classList.contains("cancel")) cancel();
+        else { e.preventDefault(); confirm(); }
+        return;
+      }
+      if(e.key==="Tab"){ // keep focus inside the dialog
+        const f=[...back.querySelectorAll("input,button")];
         const idx=f.indexOf(document.activeElement);
         e.preventDefault();
         f[(idx + (e.shiftKey?-1:1) + f.length) % f.length].focus();
       }
     };
-    back.querySelector(".cancel").onclick=()=>close(false);
-    back.querySelector(".primary").onclick=()=>close(true);
-    back.onclick=e=>{ if(e.target===back)close(false); };
+    back.querySelector(".cancel").onclick=cancel;
+    back.querySelector(".primary").onclick=confirm;
+    back.onclick=e=>{ if(e.target===back)cancel(); };
     document.addEventListener("keydown",onKey);
-    back.querySelector(".primary").focus();
+    onOpen(back);
+  });
+}
+
+function confirmModal(message,okLabel){
+  return openModal({
+    body:"<p></p>",
+    okLabel:okLabel||"OK",
+    cancelValue:false,
+    readResult:()=>true,
+    onOpen:back=>{
+      back.querySelector("p").textContent=message; // textContent: never inject
+      back.querySelector(".primary").focus();
+    },
   });
 }
 
 function promptModal(message,defaultValue,okLabel){
-  return new Promise(resolve=>{
-    const back=document.createElement("div");
-    back.className="modal-backdrop";
-    back.innerHTML=`<div class="modal"><p></p>`+
-      `<input class="modal-input" type="text" dir="ltr">`+
-      `<div class="actions"><button class="cancel">Cancel</button>`+
-      `<button class="primary">${okLabel||"OK"}</button></div></div>`;
-    back.querySelector("p").textContent=message;
-    const input=back.querySelector(".modal-input");
-    input.value=defaultValue||"";
-    document.body.appendChild(back);
-    const close=v=>{ back.remove(); document.removeEventListener("keydown",onKey); resolve(v); };
-    const onKey=e=>{
-      if(e.key==="Escape")close(null);
-      else if(e.key==="Tab"){ // trap focus among input + buttons
-        const f=[...back.querySelectorAll("input,button")];
-        const idx=f.indexOf(document.activeElement);
-        e.preventDefault();
-        f[(idx + (e.shiftKey?-1:1) + f.length) % f.length].focus();
-      }
-    };
-    const submit=()=>close(input.value.trim()||null);
-    input.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); submit(); } });
-    back.querySelector(".cancel").onclick=()=>close(null);
-    back.querySelector(".primary").onclick=submit;
-    back.onclick=e=>{ if(e.target===back)close(null); };
-    document.addEventListener("keydown",onKey);
-    input.focus();
-    input.select();
+  return openModal({
+    body:`<p></p><input class="modal-input" type="text" dir="ltr">`,
+    okLabel:okLabel||"OK",
+    cancelValue:null,
+    readResult:back=>back.querySelector(".modal-input").value.trim() || null,
+    onOpen:back=>{
+      back.querySelector("p").textContent=message; // textContent: never inject
+      const input=back.querySelector(".modal-input");
+      input.value=defaultValue||"";
+      input.focus();
+      input.select();
+    },
   });
 }
 
+const MAX_TABLE_COLS=20, MAX_TABLE_ROWS=50;
 function tableSizeModal(){
-  return new Promise(resolve=>{
-    const back=document.createElement("div");
-    back.className="modal-backdrop";
-    back.innerHTML=`<div class="modal"><p>Insert table</p>`+
-      `<div class="table-fields">`+
-        `<label>Columns<input class="modal-input" type="number" min="1" max="20" value="3"></label>`+
-        `<label>Rows<input class="modal-input" type="number" min="1" max="50" value="3"></label>`+
-      `</div>`+
-      `<div class="actions"><button class="cancel">Cancel</button>`+
-      `<button class="primary">Insert</button></div></div>`;
-    document.body.appendChild(back);
-    const [colsIn,rowsIn]=back.querySelectorAll("input");
-    const close=v=>{ back.remove(); document.removeEventListener("keydown",onKey); resolve(v); };
-    const clamp=(el,max)=>Math.min(max,Math.max(1,parseInt(el.value,10)||1));
-    const submit=()=>close({cols:clamp(colsIn,20),rows:clamp(rowsIn,50)});
-    const onKey=e=>{
-      if(e.key==="Escape")close(null);
-      else if(e.key==="Enter"){ e.preventDefault(); submit(); }
-      else if(e.key==="Tab"){ // trap focus among the fields + buttons
-        const f=[...back.querySelectorAll("input,button")];
-        const idx=f.indexOf(document.activeElement);
-        e.preventDefault();
-        f[(idx + (e.shiftKey?-1:1) + f.length) % f.length].focus();
-      }
-    };
-    back.querySelector(".cancel").onclick=()=>close(null);
-    back.querySelector(".primary").onclick=submit;
-    back.onclick=e=>{ if(e.target===back)close(null); };
-    document.addEventListener("keydown",onKey);
-    colsIn.focus();
-    colsIn.select();
+  const clamp=(el,max)=>Math.min(max,Math.max(1,parseInt(el.value,10)||1));
+  return openModal({
+    body:`<p>Insert table</p><div class="table-fields">`+
+      `<label>Columns<input class="modal-input" type="number" min="1" max="${MAX_TABLE_COLS}" value="3"></label>`+
+      `<label>Rows<input class="modal-input" type="number" min="1" max="${MAX_TABLE_ROWS}" value="3"></label>`+
+      `</div>`,
+    okLabel:"Insert",
+    cancelValue:null,
+    readResult:back=>{
+      const [colsIn,rowsIn]=back.querySelectorAll("input");
+      return {cols:clamp(colsIn,MAX_TABLE_COLS),rows:clamp(rowsIn,MAX_TABLE_ROWS)};
+    },
+    onOpen:back=>{ const cols=back.querySelector("input"); cols.focus(); cols.select(); },
   });
 }
 
@@ -1028,13 +1021,15 @@ document.addEventListener("keydown",e=>{
   }
 });
 findInput.addEventListener("input",refreshFindCount);
+// Escape closes from anywhere in the bar, including the buttons
+findbar.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){ e.preventDefault(); closeFind(); }
+});
 findInput.addEventListener("keydown",e=>{
   if(e.key==="Enter"){ e.preventDefault(); gotoMatch(e.shiftKey?-1:1); }
-  else if(e.key==="Escape"){ e.preventDefault(); closeFind(); }
 });
 replaceInput.addEventListener("keydown",e=>{
   if(e.key==="Enter"){ e.preventDefault(); replaceCurrent(); }
-  else if(e.key==="Escape"){ e.preventDefault(); closeFind(); }
 });
 document.getElementById("findNext").onclick=()=>gotoMatch(1);
 document.getElementById("findPrev").onclick=()=>gotoMatch(-1);
