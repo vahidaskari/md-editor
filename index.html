@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MD Editor</title>
+<meta name="description" content="A fast, free markdown editor that runs entirely in your browser — live editable preview, find &amp; replace, checklists, tables, dark mode, RTL support, and PDF export. No sign-up, nothing to install.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -44,7 +45,7 @@
   <button id="findClose" title="Close (Esc)">✕</button>
 </div>
 
-<div class="main">
+<main class="main">
   <div class="pane edit-pane">
     <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off"
               autocapitalize="off" placeholder="# Write markdown here…"></textarea>
@@ -52,11 +53,8 @@
   <div class="divider" id="divider" title="Drag to resize"></div>
   <div class="pane preview-pane">
     <div class="preview" id="preview"></div>
-    <div id="toolsLoading" class="tools-loading" hidden>
-      <span class="spinner"></span>preparing editor…
-    </div>
   </div>
-</div>
+</main>
 
 <!-- Floating formatting toolbar for the editable preview -->
 <div id="fmtbar" class="fmtbar" hidden>
@@ -92,13 +90,8 @@
   </span>
 </footer>
 
-<!-- App logic first (defer) so the live preview renders immediately,
-     independent of the heavier third-party libs below. -->
+<!-- The only script on the critical path. The third-party libraries it needs for
+     preview-editing and PDF export are fetched on demand (see app.js §5 / §8). -->
 <script defer src="app.js"></script>
-<!-- Third-party libs — only needed for preview-editing, the format toolbar, and PDF.
-     They load in the background and never block the first render. -->
-<script defer src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.min.js"></script>
 </body>
 </html>

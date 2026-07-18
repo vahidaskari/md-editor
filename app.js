@@ -18,7 +18,6 @@
     15. Preview formatting toolbar (select or right-click)
     16. Drag & drop import
     17. Find & Replace (Ctrl/Cmd+F)
-    18. "Tools loading" indicator
    ============================================================ */
 
 /* ============================================================
@@ -106,7 +105,9 @@ function render(src){
         const m=it.match(/^\[([ xX])\]\s+(.*)$/);
         if(m){
           const checked=m[1].toLowerCase()==="x";
-          return `<li class="task-item"><input type="checkbox"${checked?" checked":""}> ${inline(escapeHtml(m[2]))}</li>`;
+          // aria-label: a bare checkbox has no accessible name for screen readers
+          const label=attrValue(escapeHtml(m[2].trim() || "Task"));
+          return `<li class="task-item"><input type="checkbox"${checked?" checked":""} aria-label="${label}"> ${inline(escapeHtml(m[2]))}</li>`;
         }
         return `<li>${inline(escapeHtml(it))}</li>`;
       }).join("")+"</ul>";
@@ -367,6 +368,36 @@ editor.addEventListener("input",update);
 preview.contentEditable="true";
 preview.spellcheck=false;
 
+/* Third-party libraries are fetched the first time they're actually needed, not
+   on page load. html2pdf alone is 234 KB — keeping it off the critical path is
+   the single biggest win for first paint on a slow connection. */
+const CDN={
+  turndown:    "https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.min.js",
+  turndownGfm: "https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.min.js",
+  html2pdf:    "https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js",
+};
+const scriptPromises=new Map();
+function loadScript(src){
+  if(scriptPromises.has(src)) return scriptPromises.get(src);
+  const p=new Promise((resolve,reject)=>{
+    const s=document.createElement("script");
+    s.src=src;
+    s.onload=resolve;
+    s.onerror=()=>reject(new Error("failed to load "+src));
+    document.head.appendChild(s);
+  });
+  scriptPromises.set(src,p);
+  return p;
+}
+function ensureTurndown(){
+  if(typeof TurndownService!=="undefined") return Promise.resolve();
+  return loadScript(CDN.turndown).then(()=>loadScript(CDN.turndownGfm));
+}
+function ensureHtml2Pdf(){
+  if(typeof html2pdf!=="undefined") return Promise.resolve();
+  return loadScript(CDN.html2pdf);
+}
+
 let turndownSvc=null;
 function getTurndown(){
   if(turndownSvc) return turndownSvc;
@@ -384,16 +415,21 @@ function getTurndown(){
 /* One action can trigger several sync calls (execCommand fires `input`, and the
    caller syncs explicitly too), so collapse repeat warnings into one toast. */
 let engineWarnedAt=0;
-function warnEngineLoading(){
+function warnEngineFailed(){
   const now=Date.now();
   if(now-engineWarnedAt<2500) return; // a toast lives ~2.2s — don't stack duplicates
   engineWarnedAt=now;
-  toast("Editor engine still loading — try again",true);
+  toast("Couldn't load the editor engine — check your connection",true);
 }
 
-function syncPreviewToMarkdown(){
+// `retried` guards against looping if the script loads but doesn't define the global
+function syncPreviewToMarkdown(retried){
   const td=getTurndown();
-  if(!td){ warnEngineLoading(); return; }
+  if(!td){
+    if(retried){ warnEngineFailed(); return; }
+    ensureTurndown().then(()=>syncPreviewToMarkdown(true)).catch(warnEngineFailed);
+    return;
+  }
   // innerHTML serializes ATTRIBUTES, but ticking a box only flips the PROPERTY —
   // mirror it onto the attribute so the checked state survives serialization
   preview.querySelectorAll('input[type="checkbox"]')
@@ -404,11 +440,16 @@ function syncPreviewToMarkdown(){
   // update counts WITHOUT re-rendering the preview (keeps the caret in place)
   updateStats(md);
 }
-preview.addEventListener("input",syncPreviewToMarkdown);
+// wrapped, not passed directly: the listener's Event arg would be read as `retried`
+preview.addEventListener("input",()=>syncPreviewToMarkdown());
 // clicking a task-list checkbox toggles it → reflect the change back into markdown
 preview.addEventListener("change",e=>{
   if(e.target.matches('input[type="checkbox"]')) syncPreviewToMarkdown();
 });
+// warm the converter as soon as the user aims at the preview, so the first
+// keystroke doesn't have to wait for the network
+["pointerdown","focusin"].forEach(ev=>
+  preview.addEventListener(ev,()=>{ ensureTurndown().catch(()=>{}); },{once:true}));
 
 // The preview is contenteditable, so a click would only drop the caret —
 // open links instead (edit their text on the markdown side).
@@ -458,6 +499,7 @@ preview.addEventListener("keydown",e=>{
     item.className="task-item";
     const cb=document.createElement("input");
     cb.type="checkbox";
+    cb.setAttribute("aria-label","Task");
     item.append(cb," ");
     li.parentNode.insertBefore(item,li.nextSibling);
     placeCaretAtEnd(item);
@@ -548,11 +590,9 @@ document.getElementById("clearBtn").onclick=async()=>{
    8. Export PDF (html2pdf → direct download, image-based)
    ============================================================ */
 document.getElementById("pdfBtn").onclick=async()=>{
-  if(typeof html2pdf==="undefined"){
-    toast("PDF engine still loading — try again in a moment",true);
-    return;
-  }
   toast("Generating PDF…");
+  try{ await ensureHtml2Pdf(); }          // 234 KB, fetched only on first export
+  catch{ toast("Couldn't load the PDF engine — check your connection",true); return; }
   preview.classList.add("pdf-export");
   try{
     // Build the PDF as a Blob, then force a download (never opens in a tab)
@@ -861,7 +901,8 @@ function applyCmd(cmd){
     case "ul":     document.execCommand("insertUnorderedList"); break;
     case "ol":     document.execCommand("insertOrderedList"); break;
     case "task":   document.execCommand("insertHTML",false,
-                     '<ul class="task-list"><li class="task-item"><input type="checkbox"> Task</li></ul>'); break;
+                     '<ul class="task-list"><li class="task-item">'+
+                     '<input type="checkbox" aria-label="Task"> Task</li></ul>'); break;
     case "link":   addLink(); return; // async (styled modal) — handles its own sync
     case "table":  addTable(); return; // async (size modal) — handles its own sync
   }
@@ -1001,19 +1042,3 @@ document.getElementById("replaceOne").onclick=replaceCurrent;
 document.getElementById("replaceAll").onclick=replaceAllMatches;
 document.getElementById("findClose").onclick=closeFind;
 
-/* ============================================================
-   18. "Tools loading" indicator (until CDN libs are ready)
-   The live preview works without them; these power preview-editing,
-   the format toolbar, and PDF export.
-   ============================================================ */
-const toolsLoading=document.getElementById("toolsLoading");
-const toolsReady=()=>typeof TurndownService!=="undefined" && typeof html2pdf!=="undefined";
-
-if(!toolsReady()){
-  toolsLoading.hidden=false;
-  // `load` fires once every deferred script has run (or failed) — no polling needed
-  window.addEventListener("load",()=>{
-    toolsLoading.classList.add("fade");
-    setTimeout(()=>{ toolsLoading.hidden=true; toolsLoading.classList.remove("fade"); },400);
-  },{once:true});
-}
