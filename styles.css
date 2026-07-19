@@ -240,6 +240,14 @@ footer a { color: var(--accent); text-decoration: underline; }
   box-shadow: 0 6px 24px rgba(0,0,0,.3);
 }
 .fmtbar[hidden] { display: none; }
+/* Heading submenu: compact, each item previews its own level's weight/size */
+#hMenu .menu-list { min-width: 64px; }
+#hMenu .menu-list [data-cmd="h1"] { font-size: 16px; font-weight: 700; }
+#hMenu .menu-list [data-cmd="h2"] { font-size: 15px; font-weight: 700; }
+#hMenu .menu-list [data-cmd="h3"] { font-size: 14px; font-weight: 600; }
+#hMenu .menu-list [data-cmd="h4"] { font-size: 13px; font-weight: 600; }
+#hMenu .menu-list [data-cmd="h5"] { font-size: 12px; font-weight: 500; }
+#hMenu .menu-list [data-cmd="h6"] { font-size: 11px; font-weight: 500; }
 .fmtbar button {
   min-width: 30px;
   padding: 5px 7px;

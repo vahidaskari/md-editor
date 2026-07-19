@@ -181,6 +181,9 @@ function sanitize(html){
    2. UI helpers — toast + confirm modal
    ============================================================ */
 function toast(msg,isErr){
+  // hammering the same action must not stack copies — one of each message at a time
+  for(const existing of toastHost.children)
+    if(existing.textContent===msg) return;
   const t=document.createElement("div");
   t.className="toast"+(isErr?" err":"");
   t.textContent=msg;
@@ -996,6 +999,7 @@ const fmtbar=document.getElementById("fmtbar");
 
 // anchor the bar above `rect` (a selection rect, or a zero-width rect at the cursor)
 function positionFmtbar(rect){
+  hMenu.classList.remove("open"); // don't carry a stale open submenu to a new spot
   fmtbar.hidden=false; // must be visible to measure
   const bw=fmtbar.offsetWidth, bh=fmtbar.offsetHeight;
   let top=rect.top-bh-8;
@@ -1133,6 +1137,32 @@ async function addLink(){
   showFmtbarForSelection();
 }
 
+// closest element ancestor of the selection (inside the preview) matching `sel`
+function selectionAncestor(sel){
+  let node=window.getSelection().anchorNode;
+  if(!node) return null;
+  if(node.nodeType!==1) node=node.parentElement;
+  while(node && node!==preview){
+    if(node.matches(sel)) return node;
+    node=node.parentElement;
+  }
+  return null;
+}
+
+/* formatBlock is not a toggle, and inside a list item Chrome NESTS the result
+   (li > h1 > h1 > …) — each click compounds the em-based font size. Markdown
+   can't express a heading or quote inside a list item anyway, so refuse there;
+   elsewhere, a second click toggles back to a paragraph. */
+function toggleBlock(tag){
+  if(selectionAncestor("li")){ toast("Headings can't go inside a list item",true); return; }
+  document.execCommand("formatBlock",false,selectionAncestor(tag)? "P" : tag.toUpperCase());
+}
+function toggleQuote(){
+  if(selectionAncestor("li")){ toast("Quotes can't go inside a list item",true); return; }
+  if(selectionAncestor("blockquote")) document.execCommand("outdent"); // unwraps the quote
+  else document.execCommand("formatBlock",false,"BLOCKQUOTE");
+}
+
 function applyCmd(cmd){
   preview.focus();
   switch(cmd){
@@ -1140,9 +1170,9 @@ function applyCmd(cmd){
     case "italic": document.execCommand("italic"); break;
     case "strike": document.execCommand("strikeThrough"); break;
     case "code":   toggleInlineCode(); break;
-    case "h1":     document.execCommand("formatBlock",false,"H1"); break;
-    case "h2":     document.execCommand("formatBlock",false,"H2"); break;
-    case "quote":  document.execCommand("formatBlock",false,"BLOCKQUOTE"); break;
+    case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
+                   toggleBlock(cmd); break;
+    case "quote":  toggleQuote(); break;
     case "ul":     document.execCommand("insertUnorderedList"); break;
     case "ol":     document.execCommand("insertOrderedList"); break;
     case "task":   document.execCommand("insertHTML",false,
@@ -1154,9 +1184,18 @@ function applyCmd(cmd){
   syncPreviewToMarkdown();
   showFmtbarForSelection();
 }
-fmtbar.querySelectorAll("button").forEach(b=>{
+fmtbar.querySelectorAll("button[data-cmd]").forEach(b=>{
   b.onclick=()=>applyCmd(b.dataset.cmd);
 });
+
+// Heading submenu (H1–H6), same open/close pattern as the header menus.
+const hMenu=document.getElementById("hMenu");
+document.getElementById("hBtn").onclick=e=>{
+  e.stopPropagation();
+  hMenu.classList.toggle("open");
+};
+// a click anywhere else (including a heading item — it bubbles) closes it
+document.addEventListener("click",()=>hMenu.classList.remove("open"));
 
 /* ============================================================
    16. Drag & drop import (.md / .markdown / .txt)
