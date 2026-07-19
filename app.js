@@ -770,8 +770,13 @@ function showFmtbarForSelection(){
   positionFmtbar(rect);
 }
 
-// show on selection (mouse or keyboard)
-preview.addEventListener("mouseup",()=>setTimeout(showFmtbarForSelection,0));
+// show on selection (mouse or keyboard). Chrome fires mouseup *after* contextmenu
+// on a right-click, so without the button guard it would immediately re-hide the
+// bar the contextmenu handler below just opened.
+preview.addEventListener("mouseup",e=>{
+  if(e.button===2) return;
+  setTimeout(showFmtbarForSelection,0);
+});
 preview.addEventListener("keyup",()=>setTimeout(showFmtbarForSelection,0));
 // show on right-click (also lets you insert a table with no selection)
 preview.addEventListener("contextmenu",e=>{
