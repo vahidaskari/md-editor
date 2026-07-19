@@ -305,6 +305,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 - **Find & replace** with \`Ctrl+F\`
 - **Checklists**, tables, code blocks, quotes and images
 - **Mermaid diagrams** — put one in a \`\`\`mermaid code block
+- **Reading mode** — just your document, distraction-free (Esc to leave)
 - **Dark / light** themes and **RTL / LTR** text direction
 - **Resizable panes** — drag the divider, double-click to reset
 - **Sync scroll** between the editor and the preview
@@ -574,7 +575,9 @@ function syncPreviewToMarkdown(retried){
 preview.addEventListener("input",()=>syncPreviewToMarkdown());
 // clicking a task-list checkbox toggles it → reflect the change back into markdown
 preview.addEventListener("change",e=>{
-  if(e.target.matches('input[type="checkbox"]')) syncPreviewToMarkdown();
+  if(!e.target.matches('input[type="checkbox"]')) return;
+  if(isReading()){ e.target.checked=!e.target.checked; return; } // read-only
+  syncPreviewToMarkdown();
 });
 // warm the converter as soon as the user aims at the preview, so the first
 // keystroke doesn't have to wait for the network
@@ -909,6 +912,27 @@ document.getElementById("themeBtn").onclick=()=>{
 };
 
 /* ============================================================
+   11b. Reading mode — just the rendered document, read-only
+   ============================================================ */
+/* Hides the chrome (header, footer, editor pane) and locks every editing
+   path: contenteditable off, formatting bar and custom context menu skipped,
+   checkboxes inert, and Ctrl+F handed back to the browser's own find. */
+function isReading(){ return document.body.classList.contains("reading"); }
+function setReading(on){
+  document.body.classList.toggle("reading",on);
+  preview.contentEditable = on ? "false" : "true";
+  fmtbar.hidden=true;
+  hMenu.classList.remove("open");
+  findbar.hidden=true;
+}
+document.getElementById("readBtn").onclick=()=>setReading(true);
+document.getElementById("readExit").onclick=()=>setReading(false);
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && isReading() && !document.querySelector(".modal-backdrop"))
+    setReading(false);
+});
+
+/* ============================================================
    12. Resizable panes (horizontal on desktop, vertical on mobile)
    ============================================================ */
 function setSplit(pct){
@@ -1012,6 +1036,7 @@ function positionFmtbar(rect){
 }
 
 function showFmtbarForSelection(){
+  if(isReading()){ fmtbar.hidden=true; return; }
   const sel=window.getSelection();
   if(!sel || sel.isCollapsed || !sel.rangeCount || !preview.contains(sel.anchorNode)){
     fmtbar.hidden=true; return;
@@ -1031,6 +1056,7 @@ preview.addEventListener("mouseup",e=>{
 preview.addEventListener("keyup",()=>setTimeout(showFmtbarForSelection,0));
 // show on right-click (also lets you insert a table with no selection)
 preview.addEventListener("contextmenu",e=>{
+  if(isReading()) return; // reading mode keeps the browser's own menu
   e.preventDefault();
   positionFmtbar({top:e.clientY,bottom:e.clientY,left:e.clientX,width:0});
 });
@@ -1307,6 +1333,7 @@ document.addEventListener("keydown",e=>{
   // e.code is the physical key, so this still fires on non-Latin layouts
   // (with a Persian layout e.key would be "ب", never "f")
   if((e.ctrlKey||e.metaKey) && (e.code==="KeyF" || e.key==="f" || e.key==="F")){
+    if(isReading()) return; // the browser's native find suits a read-only page
     e.preventDefault();
     openFind();
   }

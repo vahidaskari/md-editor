@@ -33,6 +33,7 @@
   </span>
   <span class="spacer"></span>
   <button id="syncBtn" title="Sync scrolling between editor and preview">Sync Scroll</button>
+  <button id="readBtn" title="Reading mode (Esc to leave)">Reading Mode</button>
   <button id="viewBtn" title="Switch which pane is shown">◫ Both</button>
   <button id="dirBtn" title="Toggle text direction (LTR / RTL)">⇄ RTL</button>
   <button id="themeBtn" title="Toggle dark / light">◑ Theme</button>
@@ -91,6 +92,9 @@
   <button data-cmd="link" title="Add link">🔗</button>
   <button data-cmd="table" title="Insert table">▦</button>
 </div>
+
+<!-- Reading-mode exit (the header is hidden there) -->
+<button id="readExit" class="read-exit" title="Leave reading mode (Esc)" aria-label="Leave reading mode">✕</button>
 
 <!-- Drag & drop import overlay -->
 <div id="dropzone" class="dropzone">
