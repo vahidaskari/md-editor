@@ -24,6 +24,7 @@ No build step. No server. No account. Just open it and write.
 - **Find & replace** — `Ctrl/Cmd + F`, with match count and undo support
 - **Checklists** — `- [ ]` / `- [x]` render as real checkboxes you can tick
 - **Tables** — insert with a custom row/column count
+- **Mermaid diagrams** — a ```` ```mermaid ```` code block renders as a live diagram (flowcharts, sequence, class, gantt…)
 - **Dark & light themes** — remembered between visits
 - **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew
 - **Sync scroll** — the preview follows the editor (toggleable)

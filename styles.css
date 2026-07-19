@@ -194,6 +194,20 @@ textarea {
   vertical-align: middle;
   cursor: pointer;
 }
+/* Mermaid diagrams (rendered by app.js §3b) */
+.preview .mermaid-block {
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;   /* a wide diagram scrolls inside its block, never the pane */
+  break-inside: avoid; /* PDF export (pagebreak mode "css"): don't slice a diagram */
+}
+.preview .mermaid-block svg { max-width: 100%; height: auto; }
+.preview .mermaid-error {
+  color: #f85149;     /* same red as .toast.err */
+  font-size: 13px;
+  text-align: start;
+  margin-bottom: 6px;
+}
 .preview :first-child { margin-top: 0; }
 
 /* ---------- Footer ---------- */

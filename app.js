@@ -74,12 +74,20 @@ function render(src){
   while(i<lines.length){
     const line=lines[i];
 
-    // fenced code block
-    if(/^```/.test(line)){
+    // fenced code block. A ```mermaid fence becomes a placeholder that §3b fills
+    // in asynchronously — the raw source rides along in data-mmd, and the code
+    // block inside is the fallback shown before (or without) the library.
+    const fence=line.match(/^```(\S*)/);
+    if(fence){
       const code=[]; i++;
       while(i<lines.length && !/^```/.test(lines[i])){ code.push(lines[i]); i++; }
       i++;
-      html+=`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`;
+      const body=code.join("\n");
+      if(fence[1].toLowerCase()==="mermaid")
+        html+=`<div class="mermaid-block" data-mmd="${attrValue(escapeHtml(body))}">`+
+              `<pre><code>${escapeHtml(body)}</code></pre></div>`;
+      else
+        html+=`<pre><code>${escapeHtml(body)}</code></pre>`;
       continue;
     }
     // raw HTML block — a line holding just a tag, e.g. <div align="center">.
@@ -148,7 +156,8 @@ const ALLOWED_TAGS=new Set(["a","abbr","b","blockquote","br","caption","code","d
   "tr","u","ul","var"]);
 const ALLOWED_ATTRS=new Set(["align","alt","checked","class","colspan","dir","disabled",
   "height","href","open","rel","rowspan","span","src","srcset","start","target","title",
-  "type","width"]);
+  "type","width",
+  "data-mmd"]); // inert diagram source for §3b — carries no executable surface
 const domParser=new DOMParser();
 
 function sanitize(html){
@@ -292,6 +301,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 - **Formatting toolbar** — select text or right-click inside the preview
 - **Find & replace** with \`Ctrl+F\`
 - **Checklists**, tables, code blocks, quotes and images
+- **Mermaid diagrams** — put one in a \`\`\`mermaid code block
 - **Dark / light** themes and **RTL / LTR** text direction
 - **Resizable panes** — drag the divider, double-click to reset
 - **Sync scroll** between the editor and the preview
@@ -310,12 +320,129 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 console.log("Hello, markdown!");
 \`\`\`
 
+\`\`\`mermaid
+graph LR
+  A[Write markdown] --> B(Live preview)
+  B --> C{Happy?}
+  C -->|yes| D[Export PDF]
+  C -->|no| A
+\`\`\`
+
 | Shortcut | Action |
 | --- | --- |
 | Ctrl/Cmd + S | Save as .md |
 | Ctrl/Cmd + F | Find & replace |
 | Ctrl/Cmd + Z | Undo |
 `;
+
+/* ============================================================
+   3b. Mermaid diagrams — lazy ESM import, drawn after sanitize
+   ============================================================ */
+/* The renderer emits a .mermaid-block placeholder (source in data-mmd, plain
+   code block as fallback). The library is imported only once a document
+   actually contains a diagram — a doc without one costs zero bytes. Its SVG
+   is injected AFTER sanitize() ran, so the allowlist never has to admit SVG
+   tags; safety inside the SVG is mermaid's securityLevel:"strict".
+   This section sits before update() because update() calls the scheduler. */
+const MERMAID_ESM="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.esm.min.mjs";
+let mermaidPromise=null, mermaidWarned=false, mermaidTimer=null, mermaidRun=0, mermaidSeq=0;
+const mermaidCache=new Map();   // diagram source -> rendered SVG markup
+
+function mermaidTheme(){
+  return document.documentElement.getAttribute("data-theme")==="dark" ? "dark" : "default";
+}
+function mermaidInit(m,themeOverride){
+  m.initialize({
+    startOnLoad:false,
+    securityLevel:"strict",       // labels escaped; scripts and click bindings blocked
+    suppressErrorRendering:true,  // errors go to our catch, not into the document
+    theme:themeOverride||mermaidTheme(),
+    // The PDF exporter draws via html2canvas, which can't paint <foreignObject>
+    // HTML labels — force plain SVG <text> labels instead.
+    htmlLabels:false,
+    flowchart:{htmlLabels:false},
+  });
+}
+function ensureMermaid(){
+  if(!mermaidPromise){
+    mermaidPromise=import(MERMAID_ESM).then(mod=>{ mermaidInit(mod.default); return mod.default; });
+    mermaidPromise.catch(()=>{ mermaidPromise=null; }); // failed load may be retried later
+  }
+  return mermaidPromise;
+}
+
+/* render() measures text in a temp <div> that mermaid appends to <body> by
+   default. Our <body> is a column flexbox, so that div becomes a flex item and
+   shoves the footer up until the render finishes. Hand render() a host that is
+   position:fixed instead: out of the document flow (nothing moves) but still
+   laid out (unlike display:none), so text measurement keeps working. */
+let mermaidHost=null;
+function mermaidRenderHost(){
+  if(!mermaidHost){
+    mermaidHost=document.createElement("div");
+    mermaidHost.style.cssText="position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none";
+    document.body.appendChild(mermaidHost);
+  }
+  return mermaidHost;
+}
+
+async function renderMermaidBlocks(){
+  const run=++mermaidRun;
+  const blocks=preview.querySelectorAll(".mermaid-block");
+  if(!blocks.length) return;
+  let m;
+  try{ m=await ensureMermaid(); }
+  catch{
+    if(!mermaidWarned){
+      mermaidWarned=true;
+      toast("Couldn't load the diagram engine — check your connection",true);
+    }
+    return; // the fallback code block stays visible
+  }
+  for(const block of blocks){
+    if(run!==mermaidRun) return;  // a newer render pass took over; its blocks are fresher
+    const src=block.dataset.mmd || "";
+    const cached=mermaidCache.get(src);
+    if(cached!==undefined){ block.innerHTML=cached; continue; }
+    try{
+      const {svg}=await m.render("mmd-"+(++mermaidSeq),src,mermaidRenderHost());
+      if(mermaidCache.size>100) mermaidCache.clear(); // crude cap; sources are tiny anyway
+      mermaidCache.set(src,svg);
+      if(run===mermaidRun) block.innerHTML=svg;
+    }catch(err){
+      // syntax error → clean message + the source, instead of mermaid's error art
+      const msg=document.createElement("div");
+      msg.className="mermaid-error";
+      msg.textContent="Diagram error: "+String(err && err.message || err).split("\n")[0];
+      const pre=document.createElement("pre");
+      const code=document.createElement("code");
+      code.textContent=src;
+      pre.appendChild(code);
+      block.replaceChildren(msg,pre);
+    }
+  }
+}
+
+function scheduleMermaidRender(){
+  const blocks=preview.querySelectorAll(".mermaid-block");
+  if(!blocks.length) return;
+  // Lock the blocks immediately (not after the debounce): typing inside one in
+  // the preview would let Turndown turn the rendered SVG into garbage — the
+  // markdown source is the only editable form of a diagram.
+  blocks.forEach(b=>b.setAttribute("contenteditable","false"));
+  clearTimeout(mermaidTimer);
+  mermaidTimer=setTimeout(renderMermaidBlocks,300);
+}
+
+// Theme switch: mermaid bakes colours into the SVG, so re-init and redraw.
+function rethemeMermaid(){
+  if(!mermaidPromise) return; // nothing was ever drawn
+  mermaidPromise.then(m=>{
+    mermaidInit(m);
+    mermaidCache.clear();
+    renderMermaidBlocks();
+  }).catch(()=>{});
+}
 
 /* ============================================================
    4. Live render / autosave
@@ -344,6 +471,7 @@ document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave
 function update(){
   const v=editor.value;
   preview.innerHTML=sanitize(render(v));
+  scheduleMermaidRender();
   persist(v);
   updateStats(v);
 }
@@ -402,6 +530,12 @@ function getTurndown(){
     emDelimiter:"*"
   });
   if(window.turndownPluginGfm) turndownSvc.use(window.turndownPluginGfm.gfm);
+  // A rendered diagram round-trips via its data-mmd source — never its SVG,
+  // which Turndown would otherwise mangle into plain text.
+  turndownSvc.addRule("mermaid",{
+    filter:node=>node.nodeType===1 && node.classList.contains("mermaid-block"),
+    replacement:(content,node)=>"\n\n```mermaid\n"+(node.getAttribute("data-mmd")||"")+"\n```\n\n"
+  });
   return turndownSvc;
 }
 
@@ -587,6 +721,32 @@ document.getElementById("pdfBtn").onclick=async()=>{
   try{ await ensureHtml2Pdf(); }          // 234 KB, fetched only on first export
   catch{ toast("Couldn't load the PDF engine — check your connection",true); return; }
   preview.classList.add("pdf-export");
+  // PDF pages are white, but in dark mode the diagrams were drawn with the
+  // dark mermaid theme (pale strokes, light text) — unreadable on paper.
+  // Redraw them in the light theme for the capture; restored in `finally`.
+  const isDark=mermaidTheme()==="dark";
+  if(isDark && mermaidPromise && preview.querySelector(".mermaid-block")){
+    try{
+      mermaidInit(await mermaidPromise,"default");
+      mermaidCache.clear();
+      await renderMermaidBlocks();
+    }catch{ /* diagrams just keep their dark colours */ }
+  }
+  // html2canvas draws inline SVG through its own serialize-to-image path, which
+  // ignores document CSS (max-width:100%) — wide diagrams came out cropped.
+  // Sidestep that path entirely: rasterise each diagram to a PNG <img> for the
+  // capture (the same reliable path markdown images take), restore afterwards.
+  const swapped=[];
+  for(const svg of preview.querySelectorAll(".mermaid-block svg")){
+    try{
+      const img=document.createElement("img");
+      img.src=await mermaidSvgToPng(svg);
+      img.style.maxWidth="100%";
+      swapped.push({svg,img});
+      svg.replaceWith(img);
+    }catch{ /* leave this one as SVG — worst case it exports as before */ }
+  }
+  const unswap=()=>swapped.forEach(({svg,img})=>img.replaceWith(svg));
   try{
     // Build the PDF as a Blob, then force a download (never opens in a tab)
     const blob=await html2pdf().set({
@@ -608,9 +768,36 @@ document.getElementById("pdfBtn").onclick=async()=>{
   }catch{
     toast("PDF export failed",true);
   }finally{
+    unswap();
+    if(isDark) rethemeMermaid(); // back to the dark-theme diagrams on screen
     preview.classList.remove("pdf-export");
   }
 };
+
+// Rasterise a rendered mermaid SVG to a PNG data URL at 2x its on-screen size
+// (matching the html2canvas scale:2 capture, so it stays sharp in the PDF).
+async function mermaidSvgToPng(svg){
+  const r=svg.getBoundingClientRect();
+  const W=Math.max(1,Math.round(r.width)), H=Math.max(1,Math.round(r.height));
+  // serialize a copy with explicit pixel dimensions — an <img> needs an
+  // intrinsic size, and Firefox won't draw an svg image without one
+  const copy=svg.cloneNode(true);
+  copy.setAttribute("width",W);
+  copy.setAttribute("height",H);
+  copy.style.maxWidth="";
+  const xml=new XMLSerializer().serializeToString(copy);
+  const img=new Image();
+  await new Promise((res,rej)=>{
+    img.onload=res;
+    img.onerror=()=>rej(new Error("svg rasterise failed"));
+    img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(xml);
+  });
+  const canvas=document.createElement("canvas");
+  canvas.width=W*2;
+  canvas.height=H*2;
+  canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+  return canvas.toDataURL("image/png");
+}
 
 /* ============================================================
    9. Copy menu — Markdown / HTML / Plain text
@@ -656,6 +843,7 @@ document.getElementById("themeBtn").onclick=()=>{
   const next=cur==="dark"?"light":"dark";
   document.documentElement.setAttribute("data-theme",next);
   localStorage.setItem(THEME_KEY,next);
+  rethemeMermaid(); // diagram colours are baked into the SVG at render time
 };
 
 /* ============================================================
