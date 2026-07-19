@@ -29,7 +29,7 @@ No build step. No server. No account. Just open it and write.
 - **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew
 - **Sync scroll** — the preview follows the editor (toggleable)
 - **Copy as** — Markdown, HTML, or plain text
-- **Import / export** — open `.md` files, drag & drop them in, save `.md`, or export a PDF
+- **Import / export** — open `.md` files or drag & drop them in; export as HTML, PDF or Markdown
 - **Autosave** — your document is kept in the browser as you write
 - **Smart lists** — press Enter and the next bullet, number or checkbox continues automatically
 

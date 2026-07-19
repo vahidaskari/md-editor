@@ -15,14 +15,20 @@
   <span class="brand">✎ MD Editor</span>
   <button id="clearBtn" title="Clear editor (undo with Ctrl+Z)">Clear</button>
   <button id="openBtn" title="Open a .md file">Open</button>
-  <button id="saveBtn" title="Download as .md (Ctrl+S)">Save</button>
-  <button id="pdfBtn" title="Export preview as PDF">Export PDF</button>
+  <span class="menu" id="exportMenu">
+    <button id="exportBtn" title="Export as…">Export ▾</button>
+    <span class="menu-list">
+      <button data-export="md">Markdown (.md)</button>
+      <button data-export="pdf">PDF (.pdf)</button>
+      <button data-export="html">HTML (.html)</button>
+    </span>
+  </span>
   <span class="menu" id="copyMenu">
     <button id="copyBtn" title="Copy as…">Copy ▾</button>
     <span class="menu-list">
       <button data-copy="md">Markdown</button>
-      <button data-copy="html">HTML</button>
       <button data-copy="text">Plain text</button>
+      <button data-copy="html">HTML</button>
     </span>
   </span>
   <span class="spacer"></span>

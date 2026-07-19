@@ -8,7 +8,7 @@
      5. Editable preview (HTML → markdown via Turndown)
      6. Editor keyboard shortcuts
      7. Save / Open files
-     8. Export PDF
+     8. Export menu (HTML / PDF / Markdown)
      9. Copy menu
     10. Text direction (LTR / RTL)
     11. Theme toggle
@@ -306,7 +306,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 - **Resizable panes** — drag the divider, double-click to reset
 - **Sync scroll** between the editor and the preview
 - **Copy** as Markdown, HTML or plain text
-- **Export PDF**, save \`.md\`, or drag a file in to open it
+- **Export** as HTML, PDF or Markdown — or drag a \`.md\` file in to open it
 - **Autosaves** to your browser as you write
 
 ## To-do
@@ -679,16 +679,17 @@ document.addEventListener("keydown",e=>{
 /* ============================================================
    7. Save / Open files
    ============================================================ */
-function save(){
-  const blob=new Blob([editor.value],{type:"text/markdown"});
+function downloadBlob(name,blob){
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob);
-  a.download="document.md";
+  a.download=name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+function save(){
+  downloadBlob("document.md",new Blob([editor.value],{type:"text/markdown"}));
   toast("Saved document.md");
 }
-document.getElementById("saveBtn").onclick=save;
 
 function loadFile(file){
   const r=new FileReader();
@@ -714,9 +715,73 @@ document.getElementById("clearBtn").onclick=async()=>{
 };
 
 /* ============================================================
-   8. Export PDF (html2pdf → direct download, image-based)
+   8. Export menu — HTML / PDF / Markdown
    ============================================================ */
-document.getElementById("pdfBtn").onclick=async()=>{
+const exportMenu=document.getElementById("exportMenu");
+document.getElementById("exportBtn").onclick=e=>{
+  e.stopPropagation();
+  copyMenu.classList.remove("open");   // only one menu open at a time
+  exportMenu.classList.toggle("open");
+};
+document.addEventListener("click",()=>exportMenu.classList.remove("open"));
+exportMenu.querySelectorAll("[data-export]").forEach(btn=>{
+  btn.onclick=()=>{
+    exportMenu.classList.remove("open");
+    if(btn.dataset.export==="md") save();
+    else if(btn.dataset.export==="html") exportHtml();
+    else exportPdf();
+  };
+});
+
+// Standalone .html file: the rendered preview plus a small self-contained
+// stylesheet. Light theme — a document is usually read on a white page.
+async function exportHtml(){
+  const isDark=mermaidTheme()==="dark";
+  if(isDark && mermaidPromise && preview.querySelector(".mermaid-block")){
+    try{
+      mermaidInit(await mermaidPromise,"default");
+      mermaidCache.clear();
+      await renderMermaidBlocks();
+    }catch{ /* keep the dark diagrams */ }
+  }
+  const body=preview.innerHTML;
+  if(isDark) rethemeMermaid();
+  const title=escapeHtml((editor.value.match(/^#\s+(.+)$/m)||[])[1] || "Document");
+  const doc=`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<style>
+body{max-width:800px;margin:2rem auto;padding:0 16px;color:#1f2328;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6}
+h1,h2{border-bottom:1px solid #d0d7de;padding-bottom:.3em}
+code{background:#f6f8fa;border:1px solid #d0d7de;border-radius:4px;padding:.15em .4em;
+  font-family:ui-monospace,Consolas,monospace;font-size:85%}
+pre{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:14px;overflow-x:auto}
+pre code{border:none;padding:0;background:none}
+blockquote{margin:0;padding:0 1em;color:#656d76;border-left:3px solid #d0d7de}
+table{border-collapse:collapse}
+th,td{border:1px solid #d0d7de;padding:6px 12px}
+img,svg{max-width:100%}
+a{color:#0969da}
+hr{border:none;border-top:1px solid #d0d7de}
+ul.task-list{list-style:none;padding-left:.3em}
+li.task-item{list-style:none}
+.mermaid-block{margin:1em 0;text-align:center;overflow-x:auto}
+.mermaid-error{color:#d1242f;font-size:13px;text-align:left}
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+  downloadBlob("document.html",new Blob([doc],{type:"text/html"}));
+  toast("Saved document.html");
+}
+
+async function exportPdf(){
   toast("Generating PDF…");
   try{ await ensureHtml2Pdf(); }          // 234 KB, fetched only on first export
   catch{ toast("Couldn't load the PDF engine — check your connection",true); return; }
@@ -756,14 +821,7 @@ document.getElementById("pdfBtn").onclick=async()=>{
       jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},
       pagebreak:{mode:["css","legacy"]}
     }).from(preview).outputPdf("blob");
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    a.href=url;
-    a.download="document.pdf";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadBlob("document.pdf",blob);
     toast("PDF downloaded ✓");
   }catch{
     toast("PDF export failed",true);
@@ -772,7 +830,7 @@ document.getElementById("pdfBtn").onclick=async()=>{
     if(isDark) rethemeMermaid(); // back to the dark-theme diagrams on screen
     preview.classList.remove("pdf-export");
   }
-};
+}
 
 // Rasterise a rendered mermaid SVG to a PNG data URL at 2x its on-screen size
 // (matching the html2canvas scale:2 capture, so it stays sharp in the PDF).
@@ -805,6 +863,7 @@ async function mermaidSvgToPng(svg){
 const copyMenu=document.getElementById("copyMenu");
 document.getElementById("copyBtn").onclick=e=>{
   e.stopPropagation();
+  exportMenu.classList.remove("open"); // only one menu open at a time
   copyMenu.classList.toggle("open");
 };
 document.addEventListener("click",()=>copyMenu.classList.remove("open"));
