@@ -13,6 +13,7 @@
   --on-accent: #ffffff; /* text on an --accent background (WCAG AA) */
   --code-bg: #f6f8fa;
   --toolbar-bg: #ffffff;
+  --err: #f85149; /* error red — readable on both themes */
 }
 [data-theme="dark"] {
   --bg: #0d1117;
@@ -50,7 +51,7 @@ header {
 header .brand {
   font-weight: 700;
   letter-spacing: -0.5px;
-  margin-right: 8px;
+  margin-inline-end: 8px;
   font-size: 15px;
 }
 header .spacer { flex: 1; }
@@ -203,7 +204,7 @@ textarea {
 }
 .preview .mermaid-block svg { max-width: 100%; height: auto; }
 .preview .mermaid-error {
-  color: #f85149;     /* same red as .toast.err */
+  color: var(--err);
   font-size: 13px;
   text-align: start;
   margin-bottom: 6px;
@@ -265,14 +266,6 @@ footer a { color: var(--accent); text-decoration: underline; }
   box-shadow: 0 6px 24px rgba(0,0,0,.3);
 }
 .fmtbar[hidden] { display: none; }
-/* Heading submenu: compact, each item previews its own level's weight/size */
-#hMenu .menu-list { min-width: 64px; }
-#hMenu .menu-list [data-cmd="h1"] { font-size: 16px; font-weight: 700; }
-#hMenu .menu-list [data-cmd="h2"] { font-size: 15px; font-weight: 700; }
-#hMenu .menu-list [data-cmd="h3"] { font-size: 14px; font-weight: 600; }
-#hMenu .menu-list [data-cmd="h4"] { font-size: 13px; font-weight: 600; }
-#hMenu .menu-list [data-cmd="h5"] { font-size: 12px; font-weight: 500; }
-#hMenu .menu-list [data-cmd="h6"] { font-size: 11px; font-weight: 500; }
 .fmtbar button {
   min-width: 30px;
   padding: 5px 7px;
@@ -283,7 +276,15 @@ footer a { color: var(--accent); text-decoration: underline; }
   border-radius: 5px;
 }
 .fmtbar button:hover { background: var(--bg); color: var(--accent); }
-.fmtbar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 3px 3px; }
+/* Heading submenu: compact, each item previews its own level's weight/size */
+#hMenu .menu-list { min-width: 64px; }
+#hMenu .menu-list [data-cmd="h1"] { font-size: 16px; font-weight: 700; }
+#hMenu .menu-list [data-cmd="h2"] { font-size: 15px; font-weight: 700; }
+#hMenu .menu-list [data-cmd="h3"] { font-size: 14px; font-weight: 600; }
+#hMenu .menu-list [data-cmd="h4"] { font-size: 13px; font-weight: 600; }
+#hMenu .menu-list [data-cmd="h5"] { font-size: 12px; font-weight: 500; }
+#hMenu .menu-list [data-cmd="h6"] { font-size: 11px; font-weight: 500; }
+.fmtbar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 3px; }
 
 /* ---------- Find & replace bar ---------- */
 .findbar {
@@ -363,7 +364,7 @@ footer a { color: var(--accent); text-decoration: underline; }
   box-shadow: 0 6px 24px rgba(0,0,0,.25);
   animation: toast-in .2s ease;
 }
-.toast.err { border-left-color: #f85149; }
+.toast.err { border-left-color: var(--err); }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -392,7 +393,6 @@ footer a { color: var(--accent); text-decoration: underline; }
 .modal p { margin: 0 0 14px; font-size: 15px; }
 .modal-input {
   width: 100%;
-  box-sizing: border-box;
   padding: 8px 10px;
   margin: 0 0 16px;
   font: inherit;

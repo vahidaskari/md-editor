@@ -4,6 +4,7 @@
      1. Markdown renderer (markdown → HTML)
      2. UI helpers (toast + confirm modal)
      3. State & elements
+    3b. Mermaid diagrams (lazy ESM import)
      4. Live render / autosave
      5. Editable preview (HTML → markdown via Turndown)
      6. Editor keyboard shortcuts
@@ -12,6 +13,7 @@
      9. Copy menu
     10. Text direction (LTR / RTL)
     11. Theme toggle
+   11b. Reading mode
     12. Resizable panes
     13. Synced scrolling
     14. Mobile view switch
@@ -19,6 +21,12 @@
     16. Drag & drop import
     17. Find & Replace (Ctrl/Cmd+F)
    ============================================================ */
+
+/* Wrapped so none of the ~90 names below leak into window, where they could
+   collide with a CDN library (this file defines render, update, save, main…).
+   An IIFE rather than type="module" so the app still opens from file://. */
+(function(){
+"use strict";
 
 /* ============================================================
    1. Markdown renderer — minimal, dependency-free
@@ -134,7 +142,6 @@ function render(src){
       html+="<ol>"+items.map(it=>`<li>${inline(escapeHtml(it))}</li>`).join("")+"</ol>";
       continue;
     }
-    // blank line
     if(/^\s*$/.test(line)){ i++; continue; }
     // paragraph (collect until blank line or a block start)
     const para=[];
@@ -157,7 +164,8 @@ const ALLOWED_TAGS=new Set(["a","abbr","b","blockquote","br","caption","code","d
 const ALLOWED_ATTRS=new Set(["align","alt","checked","class","colspan","dir","disabled",
   "height","href","open","rel","rowspan","span","src","srcset","start","target","title",
   "type","width",
-  "data-mmd"]); // inert diagram source for §3b — carries no executable surface
+  "data-mmd",    // inert diagram source for §3b — carries no executable surface
+  "aria-label"]); // plain text for screen readers; the renderer puts it on checkboxes
 const domParser=new DOMParser();
 
 function sanitize(html){
@@ -538,7 +546,7 @@ function getTurndown(){
   // which Turndown would otherwise mangle into plain text.
   turndownSvc.addRule("mermaid",{
     filter:node=>node.nodeType===1 && node.classList.contains("mermaid-block"),
-    replacement:(content,node)=>"\n\n```mermaid\n"+(node.getAttribute("data-mmd")||"")+"\n```\n\n"
+    replacement:(_,node)=>"\n\n```mermaid\n"+(node.getAttribute("data-mmd")||"")+"\n```\n\n"
   });
   return turndownSvc;
 }
@@ -665,7 +673,6 @@ function continueList(){
   return true; // execCommand fires `input`, which re-renders via update()
 }
 
-// editor-only keys
 editor.addEventListener("keydown",e=>{
   if(e.key==="Tab"){ e.preventDefault(); typeText("  "); }
   else if(e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
@@ -739,19 +746,27 @@ exportMenu.querySelectorAll("[data-export]").forEach(btn=>{
   };
 });
 
-// Standalone .html file: the rendered preview plus a small self-contained
-// stylesheet. Light theme — a document is usually read on a white page.
-async function exportHtml(){
-  const isDark=mermaidTheme()==="dark";
-  if(isDark && mermaidPromise && preview.querySelector(".mermaid-block")){
+/* Exports land on white pages, but in dark mode the diagrams were drawn with
+   the dark mermaid theme (pale strokes, light text) — unreadable there.
+   Redraws them light and returns a restore function for the caller's finally. */
+async function lightenDiagramsForExport(){
+  const needed=mermaidTheme()==="dark" && mermaidPromise && preview.querySelector(".mermaid-block");
+  if(needed){
     try{
       mermaidInit(await mermaidPromise,"default");
       mermaidCache.clear();
       await renderMermaidBlocks();
-    }catch{ /* keep the dark diagrams */ }
+    }catch{ /* diagrams just keep their dark colours */ }
   }
+  return ()=>{ if(needed) rethemeMermaid(); };
+}
+
+// Standalone .html file: the rendered preview plus a small self-contained
+// stylesheet. Light theme — a document is usually read on a white page.
+async function exportHtml(){
+  const restoreDiagrams=await lightenDiagramsForExport();
   const body=preview.innerHTML;
-  if(isDark) rethemeMermaid();
+  restoreDiagrams();
   const title=escapeHtml((editor.value.match(/^#\s+(.+)$/m)||[])[1] || "Document");
   const doc=`<!DOCTYPE html>
 <html lang="en">
@@ -792,17 +807,7 @@ async function exportPdf(){
   try{ await ensureHtml2Pdf(); }          // 234 KB, fetched only on first export
   catch{ toast("Couldn't load the PDF engine — check your connection",true); return; }
   preview.classList.add("pdf-export");
-  // PDF pages are white, but in dark mode the diagrams were drawn with the
-  // dark mermaid theme (pale strokes, light text) — unreadable on paper.
-  // Redraw them in the light theme for the capture; restored in `finally`.
-  const isDark=mermaidTheme()==="dark";
-  if(isDark && mermaidPromise && preview.querySelector(".mermaid-block")){
-    try{
-      mermaidInit(await mermaidPromise,"default");
-      mermaidCache.clear();
-      await renderMermaidBlocks();
-    }catch{ /* diagrams just keep their dark colours */ }
-  }
+  const restoreDiagrams=await lightenDiagramsForExport();
   // html2canvas draws inline SVG through its own serialize-to-image path, which
   // ignores document CSS (max-width:100%) — wide diagrams came out cropped.
   // Sidestep that path entirely: rasterise each diagram to a PNG <img> for the
@@ -833,7 +838,7 @@ async function exportPdf(){
     toast("PDF export failed",true);
   }finally{
     unswap();
-    if(isDark) rethemeMermaid(); // back to the dark-theme diagrams on screen
+    restoreDiagrams();
     preview.classList.remove("pdf-export");
   }
 }
@@ -971,7 +976,7 @@ function startDrag(e){
 }
 divider.addEventListener("mousedown",startDrag);
 divider.addEventListener("touchstart",startDrag,{passive:false});
-divider.addEventListener("dblclick",()=>setSplit(50)); // reset to 50/50
+divider.addEventListener("dblclick",()=>setSplit(50));
 
 /* ============================================================
    13. Synced scrolling
@@ -1354,4 +1359,6 @@ document.getElementById("findPrev").onclick=()=>gotoMatch(-1);
 document.getElementById("replaceOne").onclick=replaceCurrent;
 document.getElementById("replaceAll").onclick=replaceAllMatches;
 document.getElementById("findClose").onclick=closeFind;
+
+})();
 
