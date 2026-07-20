@@ -59,6 +59,11 @@ function inline(t){
   // links [text](href)
   t = t.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
       (m,txt,href,ti)=>`<a href="${safeHref(href)}"${ti?` title="${attrValue(ti)}"`:""} target="_blank" rel="noopener noreferrer">${txt}</a>`);
+  // reference forms, after the inline ones so [x](y) always wins
+  t = t.replace(/(!?)\[([^\]]+)\]\[([^\]]*)\]/g,
+      (m,bang,txt,label)=>referenceHTML(txt,label,bang==="!") || m);
+  t = t.replace(/(!?)\[([^\]]+)\]/g,
+      (m,bang,txt)=>referenceHTML(txt,"",bang==="!") || m);
   // bold, italic, strikethrough, inline code
   t = t.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
        .replace(/__([^_]+)__/g,"<strong>$1</strong>")
@@ -82,48 +87,80 @@ function inline(t){
   return t;
 }
 
-/* Footnotes. Definitions may sit anywhere in the document but always render as
-   a numbered list at the end, so they need a document-wide pass. `fn` holds
-   that state: render() is synchronous and only re-enters itself for
-   blockquotes, so one context is enough — the outermost call always clears it.
-   Labels are word characters only, which keeps the reference (post-escaping)
-   and the definition (pre-escaping) spellings identical. */
+/* Footnote and link-reference definitions may sit anywhere in the document —
+   footnotes always render as a numbered list at the end, and a reference can be
+   used before it is defined — so both need a document-wide pass before any
+   block is parsed. `doc` holds that state: render() is synchronous and only
+   re-enters itself for blockquotes, so one context is enough, and the outermost
+   call always clears it.
+
+   Footnote labels are word characters only, which keeps the reference spelling
+   (seen after escaping) and the definition spelling (seen before) identical;
+   link labels can be anything, so those are escaped when stored. */
 const FOOTNOTE_DEF=/^\[\^([\w-]+)\]:\s*(.*)$/;
 const FOOTNOTE_REF=/\[\^([\w-]+)\]/g;
-let fn=null;
+const REF_DEF=/^\s{0,3}\[([^\]^][^\]]*)\]:\s*(\S+)(?:\s+["'(](.*)["')])?\s*$/;
+let doc=null;
 
-function extractFootnotes(lines){
-  const defs=new Map(), kept=[];
+function extractDefinitions(lines){
+  const notes=new Map(), refs=new Map(), kept=[];
+  let inFence=false;
   for(let i=0;i<lines.length;){
-    const m=lines[i].match(FOOTNOTE_DEF);
-    if(!m){ kept.push(lines[i]); i++; continue; }
-    const parts=[m[2]]; i++;
-    while(i<lines.length && /^\s+\S/.test(lines[i])){ parts.push(lines[i].trim()); i++; } // continuation
-    defs.set(m[1],parts.join(" ").trim());
+    // a definition inside a code fence is sample text, not a definition
+    if(/^```/.test(lines[i])){ inFence=!inFence; kept.push(lines[i]); i++; continue; }
+    if(inFence){ kept.push(lines[i]); i++; continue; }
+
+    const note=lines[i].match(FOOTNOTE_DEF);
+    if(note){
+      const parts=[note[2]]; i++;
+      while(i<lines.length && /^\s+\S/.test(lines[i])){ parts.push(lines[i].trim()); i++; } // continuation
+      notes.set(note[1],parts.join(" ").trim());
+      continue;
+    }
+    const ref=lines[i].match(REF_DEF);
+    if(ref){
+      refs.set(escapeHtml(ref[1]).trim().toLowerCase(),
+               {href:escapeHtml(ref[2]),title:escapeHtml(ref[3]||"")});
+      i++;
+      continue;
+    }
+    kept.push(lines[i]); i++;
   }
-  return {defs,kept};
+  return {notes,refs,kept};
 }
 
 // a reference renders only if that label was defined; numbering follows first use
 function footnoteRef(label){
-  if(!fn || !fn.defs.has(label)) return null;
-  let num=fn.used.get(label), first=false;
-  if(num===undefined){ num=fn.used.size+1; fn.used.set(label,num); first=true; }
+  if(!doc || !doc.notes.has(label)) return null;
+  let num=doc.noteUse.get(label), first=false;
+  if(num===undefined){ num=doc.noteUse.size+1; doc.noteUse.set(label,num); first=true; }
   // only the first reference carries the id, so back-links never point at a duplicate
   return `<sup class="fn-ref"${first?` id="fnref-${num}"`:""} data-fn="${attrValue(label)}">`+
          `<a href="#fn-${num}">${num}</a></sup>`;
 }
 
 function footnotesHTML(){
-  if(!fn || !fn.used.size) return "";
-  const items=[...fn.used.entries()].sort((a,b)=>a[1]-b[1]).map(([label,num])=>{
-    const text=fn.defs.get(label);
+  if(!doc || !doc.noteUse.size) return "";
+  const items=[...doc.noteUse.entries()].sort((a,b)=>a[1]-b[1]).map(([label,num])=>{
+    const text=doc.notes.get(label);
     // data-fn-src keeps the markdown source, so editing the preview round-trips
     return `<li id="fn-${num}" data-fn="${attrValue(label)}" data-fn-src="${attrValue(escapeHtml(text))}">`+
            `${inline(escapeHtml(text))} `+
            `<a class="fn-back" href="#fnref-${num}" aria-label="Back to reference ${num}">↩</a></li>`;
   }).join("");
   return `<hr class="fn-sep"><ol class="footnotes">${items}</ol>`;
+}
+
+/* Reference links and images: [text][label], the collapsed [text][], and the
+   shortcut [label]. An unknown label is left as literal text, which is what
+   keeps prose like "[TODO] fix this" intact. */
+function referenceHTML(text,label,image){
+  const def=doc && doc.refs.get((label||text).trim().toLowerCase());
+  if(!def) return null;
+  const title=def.title ? ` title="${attrValue(def.title)}"` : "";
+  return image
+    ? `<img src="${safeSrc(def.href)}" alt="${attrValue(text)}"${title}>`
+    : `<a href="${safeHref(def.href)}"${title} target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
 
 const TASK_ITEM=/^\[([ xX])\]\s+(.*)$/;
@@ -175,18 +212,18 @@ function render(src){
     .replace(/<!--[\s\S]*?-->/g,"")   // HTML comments are hidden, as in real markdown
     .replace(/\r\n?/g,"\n")
     .split("\n");
-  // The outermost call owns the footnote context: it lifts every definition out
+  // The outermost call owns the document context: it lifts every definition out
   // of the flow up front, so a reference resolves even when defined further down.
-  const top=fn===null;
+  const top=doc===null;
   if(top){
-    const found=extractFootnotes(lines);
+    const found=extractDefinitions(lines);
     lines=found.kept;
-    fn={defs:found.defs,used:new Map()};
+    doc={notes:found.notes,noteUse:new Map(),refs:found.refs};
   }
   try{
     return renderLines(lines)+(top?footnotesHTML():"");
   }finally{
-    if(top) fn=null;   // never leave a stale context behind, even on a throw
+    if(top) doc=null;   // never leave a stale context behind, even on a throw
   }
 }
 
@@ -441,53 +478,126 @@ const DIR_KEY   = "md-editor-dir";
 const SPLIT_KEY = "md-editor-split";
 const SYNC_KEY  = "md-editor-sync";
 
+/* The default document doubles as the demo and the manual: every feature below
+   is shown working rather than described, so the page teaches markdown while it
+   shows what this editor can do. Keep it honest and readable — a wall of
+   keywords would only make the tool look cheap. */
 const SAMPLE=`# Welcome to MD Editor
 
-A **simple**, fast markdown editor that runs entirely in your browser — no build step, no server, nothing to install.
+A fast markdown editor that runs entirely in your browser. No build step, no server, no account — and nothing you write ever leaves this device.
 
-## Features
-- **Live preview** as you type — and the preview is editable too
-- **Formatting toolbar** — select text or right-click inside the preview
-- **Find & replace** with \`Ctrl+F\`
-- **Checklists**, tables, code blocks, quotes and images
-- **Syntax highlighting** — name a language on a code fence
-- **Mermaid diagrams** — put one in a \`\`\`mermaid code block
-- **LaTeX math** — inline \$e^{i\\pi}+1=0\$ or full display equations
-- **Reading mode** — just your document, distraction-free (Esc to leave)
-- **Dark / light** themes and **RTL / LTR** text direction
-- **Resizable panes** — drag the divider, double-click to reset
-- **Sync scroll** between the editor and the preview
-- **Copy** as Markdown, HTML or plain text
-- **Export** as HTML, PDF or Markdown — or drag a \`.md\` file in to open it
-- **Autosaves** to your browser as you write
+**Everything on this page is markdown.** Edit the left pane and the right updates as you type. Or click straight into the preview and type there — it syncs back to markdown for you.
 
-## To-do
-- [x] Write in markdown
-- [ ] Try the checklist
-  - [ ] Indent with Tab to nest an item
-- [ ] Press Ctrl+F to find & replace
+Done reading? Hit **Clear** in the toolbar to start your own document (\`Ctrl+Z\` brings this back).
 
-> Tip: press Enter inside a list and the next item continues automatically.
+## Text
+
+**Bold**, *italic*, ~~strikethrough~~, \`inline code\`, and [links](https://github.com/vahidaskari/md-editor). Bare URLs turn into links on their own: https://daringfireball.net/projects/markdown/
+
+Select any text in the preview — or right-click it — for a formatting toolbar.
+
+> Blockquotes are good for asides, tips and pull quotes.
+
+## Lists
+
+- Press Enter and the next bullet appears
+- Press Tab to indent and nest
+  - Like this
+    - As deep as you need
+1. Numbered lists continue too
+2. And renumber themselves as you go
+
+## Checklists
+
+- [x] Write something in markdown
+- [ ] Tick this box — the markdown updates itself
+  - [ ] Nested tasks work as well
+
+## Tables
+
+The divider row sets each column's alignment:
+
+| Language | Highlighted | Notes |
+|:---------|:-----------:|------:|
+| Python   | yes         | 40+ languages |
+| Persian  | yes         | RTL supported |
+
+Need a bigger one? Right-click in the preview and pick ▦.
+
+## Code
+
+Name the language on the fence and it gets coloured:
+
+\`\`\`python
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+\`\`\`
 
 \`\`\`js
-console.log("Hello, markdown!");
+const sum = xs => xs.reduce((a, b) => a + b, 0);
 \`\`\`
+
+## Diagrams
+
+A fence tagged \`mermaid\` becomes a live diagram — flowcharts, sequence, class, gantt and more:
 
 \`\`\`mermaid
 graph LR
   A[Write markdown] --> B(Live preview)
   B --> C{Happy?}
-  C -->|yes| D[Export PDF]
+  C -->|yes| D[Export]
   C -->|no| A
 \`\`\`
 
-$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}$$
+## Math
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl/Cmd + S | Save as .md |
-| Ctrl/Cmd + F | Find & replace |
-| Ctrl/Cmd + Z | Undo |
+Inline like $E = mc^2$, or set apart on its own:
+
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}
+$$
+
+## Footnotes
+
+Reference a note[^1] and it collects itself at the bottom of the document.
+
+[^1]: Like this one — the ↩ arrow jumps back to where you were reading.
+
+## Collapsible sections
+
+<details>
+<summary>Click to expand</summary>
+
+Hidden until you open it, and markdown still works inside.
+
+</details>
+
+## In the toolbar
+
+- **Export** — Markdown, PDF or a standalone HTML file
+- **Copy** — as Markdown, HTML or plain text
+- **Reading Mode** — hides everything but your document; \`Esc\` to leave
+- **⇄ RTL** — full right-to-left for Persian, Arabic and Hebrew
+- **◑ Theme** — dark and light, remembered between visits
+- Drag the divider to resize the panes, or double-click it to even them out
+
+## Shortcuts
+
+| Key | Does |
+|:--|:--|
+| \`Ctrl/Cmd + S\` | Save as \`.md\` |
+| \`Ctrl/Cmd + F\` | Find & replace |
+| \`Ctrl/Cmd + Z\` | Undo — including Clear and Replace all |
+| \`Enter\` | Continue the current list or checklist |
+| \`Tab\` | Indent (nests a list item) |
+| \`Esc\` | Close the find bar, a dialog, or reading mode |
+
+---
+
+Your work saves to this browser as you type, and you can drag a \`.md\` file onto the window to open it.
 `;
 
 /* ============================================================
@@ -703,7 +813,7 @@ async function highlightCode(){
   for(const el of blocks){
     const lang=(el.className.match(/language-([\w+#-]+)/)||[])[1];
     if(!lang || !h.getLanguage(lang)) continue;   // unknown language → leave it plain
-    const code=el.textContent;
+    const code=codeText(el);
     const key=lang+"\0"+code;
     let out=hljsCache.get(key);
     if(out===undefined){
@@ -720,6 +830,74 @@ function scheduleHighlight(){
   if(!preview.querySelector(CODE_SELECTOR)) return;
   clearTimeout(hljsTimer);
   hljsTimer=setTimeout(highlightCode,300);
+}
+
+/* Editing a contenteditable block can leave <br> elements where the newlines
+   should be, and textContent drops those — read the text with them restored so
+   multi-line code survives both re-highlighting and the markdown write-back. */
+function codeText(el){
+  const copy=el.cloneNode(true);
+  copy.querySelectorAll("br").forEach(br=>br.replaceWith(document.createTextNode("\n")));
+  return copy.textContent;
+}
+
+/* Typing inside a code block leaves the new text uncoloured, because the
+   preview is deliberately not re-rendered on every keystroke (that would throw
+   the caret away). Re-colour just the edited block once typing pauses, and put
+   the caret back by character offset since rewriting innerHTML destroys it. */
+function caretOffsetIn(el){
+  const sel=window.getSelection();
+  if(!sel.rangeCount || !el.contains(sel.anchorNode)) return null;
+  const r=document.createRange();
+  r.selectNodeContents(el);
+  r.setEnd(sel.anchorNode,sel.anchorOffset);
+  return r.toString().length;
+}
+function restoreCaretIn(el,offset){
+  if(offset===null) return;
+  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+  let seen=0,node;
+  while((node=walker.nextNode())){
+    if(seen+node.length>=offset){
+      const r=document.createRange();
+      r.setStart(node,offset-seen);
+      r.collapse(true);
+      const sel=window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return;
+    }
+    seen+=node.length;
+  }
+  placeCaretAtEnd(el);
+}
+
+let editedCodeTimer=null;
+function scheduleCodeRehighlight(){
+  const el=selectionAncestor("pre code");
+  if(!el || !/language-/.test(el.className)) return;
+  clearTimeout(editedCodeTimer);
+  editedCodeTimer=setTimeout(()=>rehighlightBlock(el),400);
+}
+async function rehighlightBlock(el){
+  if(!el.isConnected) return;           // a re-render replaced it while we waited
+  const lang=(el.className.match(/language-([\w+#-]+)/)||[])[1];
+  if(!lang) return;
+  let h;
+  try{ h=await ensureHljs(); }catch{ return; }
+  if(!h.getLanguage(lang) || !el.isConnected) return;
+  const code=codeText(el);
+  const key=lang+"\0"+code;
+  let out=hljsCache.get(key);
+  if(out===undefined){
+    out=h.highlight(code,{language:lang,ignoreIllegals:true}).value;
+    if(hljsCache.size>200) hljsCache.clear();
+    hljsCache.set(key,out);
+  }
+  const offset=caretOffsetIn(el);
+  el.innerHTML=out;
+  el.classList.add("hljs");
+  restoreCaretIn(el,offset);
 }
 
 // theme switch only moves the screen sheet; the print sheet stays light
@@ -808,9 +986,68 @@ function getTurndown(){
     headingStyle:"atx",
     codeBlockStyle:"fenced",
     bulletListMarker:"-",
-    emDelimiter:"*"
+    emDelimiter:"*",
+    hr:"---"
   });
   if(window.turndownPluginGfm) turndownSvc.use(window.turndownPluginGfm.gfm);
+
+  /* A full sync rewrites the WHOLE document, so its output must match what the
+     user typed wherever our renderer accepts both spellings — otherwise editing
+     one word reformats every list and rule in the file. */
+  // gfm's strikethrough emits single ~, which our renderer doesn't render
+  turndownSvc.addRule("strikethrough",{
+    filter:["del","s","strike"],
+    replacement:content=>"~~"+content+"~~"
+  });
+  // "- item" with 2-space nesting (turndown's default is "-   " and 4 spaces)
+  turndownSvc.addRule("tightListItem",{
+    filter:"li",
+    replacement:(content,node,options)=>{
+      content=content.replace(/^\n+/,"").replace(/\n+$/,"\n").replace(/\n/gm,"\n  ");
+      let prefix=options.bulletListMarker+" ";
+      const parent=node.parentNode;
+      if(parent.nodeName==="OL"){
+        const start=parent.getAttribute("start");
+        const index=Array.prototype.indexOf.call(parent.children,node);
+        prefix=(start?Number(start)+index:index+1)+". ";
+      }
+      return prefix+content+(node.nextSibling && !/\n$/.test(content) ? "\n" : "");
+    }
+  });
+  // the checkbox's own space collides with the text node's leading space,
+  // producing "[x]  text" — both our creation paths already include the space
+  turndownSvc.addRule("taskCheckbox",{
+    filter:node=>node.nodeName==="INPUT" && node.type==="checkbox" &&
+                 node.parentNode.nodeName==="LI",
+    replacement:(_,node)=>node.checked?"[x]":"[ ]"
+  });
+  // turndown reads a code block with textContent, which silently drops the <br>
+  // elements an edit can leave behind — that would flatten multi-line code into
+  // one line. Read it the same way §3d does, and keep the language tag.
+  turndownSvc.addRule("fencedCode",{
+    filter:node=>node.nodeName==="PRE" && node.firstChild &&
+                 node.firstChild.nodeName==="CODE",
+    replacement:(_,node)=>{
+      const el=node.firstChild;
+      const lang=(el.className.match(/language-([\w+#-]+)/)||[])[1] || "";
+      return "\n\n```"+lang+"\n"+codeText(el).replace(/\n+$/,"")+"\n```\n\n";
+    }
+  });
+  // a link whose text IS its URL came from the autolinker — write it back bare
+  turndownSvc.addRule("bareUrl",{
+    filter:node=>node.nodeName==="A" && node.getAttribute("href")===node.textContent,
+    replacement:(_,node)=>node.getAttribute("href")
+  });
+  // <details>/<summary> have no markdown form — rebuild the raw-HTML block the
+  // renderer understands instead of letting turndown flatten them to plain text
+  turndownSvc.addRule("summary",{
+    filter:"summary",
+    replacement:(_,node)=>"<summary>"+node.textContent.trim()+"</summary>\n\n"
+  });
+  turndownSvc.addRule("details",{
+    filter:"details",
+    replacement:content=>"\n\n<details>\n"+content.trim()+"\n\n</details>\n\n"
+  });
   // A rendered diagram round-trips via its data-mmd source — never its SVG,
   // which Turndown would otherwise mangle into plain text.
   turndownSvc.addRule("mermaid",{
@@ -877,12 +1114,44 @@ function syncPreviewToMarkdown(retried){
   updateStats(md);
 }
 // wrapped, not passed directly: the listener's Event arg would be read as `retried`
-preview.addEventListener("input",()=>syncPreviewToMarkdown());
-// clicking a task-list checkbox toggles it → reflect the change back into markdown
+preview.addEventListener("input",()=>{
+  syncPreviewToMarkdown();
+  scheduleCodeRehighlight();   // colour whatever was just typed into a code block
+});
+/* Ticking a box is a one-character change, so edit that character instead of
+   rebuilding the whole document through Turndown — a full round trip would
+   reformat every list, table and rule in the file just because a box was
+   ticked. Returns the new markdown, or null if the box couldn't be located. */
+const TASK_LINE=/^((?:\s*>\s?)*\s*(?:[-*+]|\d+\.)\s+\[)([ xX])(\]\s)/;
+function toggleTaskInMarkdown(index,checked){
+  if(index<0) return null;
+  const lines=editor.value.split("\n");
+  let n=0, inFence=false;
+  for(let i=0;i<lines.length;i++){
+    if(/^```/.test(lines[i])){ inFence=!inFence; continue; }
+    if(inFence) continue;                       // a task item in a code sample isn't one
+    const m=lines[i].match(TASK_LINE);
+    if(!m) continue;
+    if(n++!==index) continue;
+    // the line must hold the PREVIOUS state — anything else means our count
+    // drifted from the DOM, and editing by index would hit the wrong item
+    if((m[2].toLowerCase()==="x")===checked) return null;
+    lines[i]=m[1]+(checked?"x":" ")+m[3]+lines[i].slice(m[0].length);
+    return lines.join("\n");
+  }
+  return null;
+}
 preview.addEventListener("change",e=>{
   if(!e.target.matches('input[type="checkbox"]')) return;
   if(isReading()){ e.target.checked=!e.target.checked; return; } // read-only
-  syncPreviewToMarkdown();
+  const boxes=[...preview.querySelectorAll('input[type="checkbox"]')];
+  const md=toggleTaskInMarkdown(boxes.indexOf(e.target),e.target.checked);
+  if(md===null){ syncPreviewToMarkdown(); return; }   // fall back to the full sync
+  // mirror property → attribute so a later full sync still sees the right state
+  e.target.toggleAttribute("checked",e.target.checked);
+  editor.value=md;
+  persist(md);
+  updateStats(md);
 });
 // warm the converter as soon as the user aims at the preview, so the first
 // keystroke doesn't have to wait for the network
@@ -967,6 +1236,23 @@ preview.addEventListener("keydown",e=>{
     li.parentNode.insertBefore(item,li.nextSibling);
     placeCaretAtEnd(item);
   }
+  syncPreviewToMarkdown();
+});
+
+/* Tab inside a list item nests it, matching the editor pane. Without this the
+   browser's default takes over and Tab just walks the focus from one task
+   checkbox to the next, which is never what someone editing a list wants.
+   Outside a list Tab is left alone, so it can still move focus. */
+preview.addEventListener("keydown",e=>{
+  if(e.key!=="Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if(isReading() || !selectionAncestor("li")) return;
+  e.preventDefault();
+  document.execCommand(e.shiftKey?"outdent":"indent");
+  // the browser builds a plain <ul> for the new level; re-tag it so checkbox
+  // items keep their bullet-less styling until the next full re-render
+  preview.querySelectorAll("li.task-item").forEach(li=>{
+    if(li.parentNode && li.parentNode.nodeName==="UL") li.parentNode.classList.add("task-list");
+  });
   syncPreviewToMarkdown();
 });
 
