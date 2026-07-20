@@ -73,15 +73,46 @@ function inline(t){
 
 const TASK_ITEM=/^\[([ xX])\]\s+(.*)$/;
 const isTaskItem=item=>TASK_ITEM.test(item);
+const LIST_ITEM=/^(\s*)([-*+]|\d+\.)\s+(.*)$/;
+const isOrderedMarker=marker=>/\d/.test(marker);
 
-// one <li>, rendered as a checkbox when the item is a GFM task ("- [x] text")
-function listItemHTML(item){
+// one <li> (plus any nested list), rendered as a checkbox for a GFM task item
+function listItemHTML(item,sub){
   const m=item.match(TASK_ITEM);
-  if(!m) return `<li>${inline(escapeHtml(item))}</li>`;
+  if(!m) return `<li>${inline(escapeHtml(item))}${sub}</li>`;
   const checked=m[1].toLowerCase()==="x" ? " checked" : "";
   // aria-label: a bare checkbox has no accessible name for screen readers
   const label=attrValue(escapeHtml(m[2].trim() || "Task"));
-  return `<li class="task-item"><input type="checkbox"${checked} aria-label="${label}"> ${inline(escapeHtml(m[2]))}</li>`;
+  return `<li class="task-item"><input type="checkbox"${checked} aria-label="${label}"> `+
+         `${inline(escapeHtml(m[2]))}${sub}</li>`;
+}
+
+/* One level of a list, recursing into deeper indents; returns [html, nextLine].
+   Caller guarantees lines[start] is a list item. Indentation alone decides
+   nesting, and switching marker kind (bullet ↔ number) starts a new list. */
+function renderList(lines,start){
+  const open=lines[start].match(LIST_ITEM);
+  const indent=open[1].length;
+  const ordered=isOrderedMarker(open[2]);
+  const items=[];
+  let i=start;
+  while(i<lines.length){
+    const m=lines[i].match(LIST_ITEM);
+    if(!m || m[1].length<indent) break;              // dedent → this level ends
+    if(m[1].length>indent){                          // indent → nest under the last item
+      if(!items.length) break;
+      const [sub,next]=renderList(lines,i);
+      items[items.length-1].sub+=sub;
+      i=next;
+      continue;
+    }
+    if(isOrderedMarker(m[2])!==ordered) break;
+    items.push({text:m[3],sub:""});
+    i++;
+  }
+  const tag=ordered?"ol":"ul";
+  const cls=(!ordered && items.some(it=>isTaskItem(it.text))) ? ' class="task-list"' : "";
+  return [`<${tag}${cls}>`+items.map(it=>listItemHTML(it.text,it.sub)).join("")+`</${tag}>`, i];
 }
 
 function render(src){
@@ -150,23 +181,10 @@ function render(src){
       html+=`<table><thead><tr>${head.map(c=>`<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
       continue;
     }
-    // unordered list (supports GFM task list items: - [ ] / - [x])
-    if(/^\s*[-*+]\s+/.test(line)){
-      const items=[];
-      while(i<lines.length && /^\s*[-*+]\s+/.test(lines[i])){
-        items.push(lines[i].replace(/^\s*[-*+]\s+/,"")); i++;
-      }
-      const hasTask=items.some(isTaskItem);
-      html+=`<ul${hasTask?' class="task-list"':''}>`+items.map(listItemHTML).join("")+"</ul>";
-      continue;
-    }
-    // ordered list
-    if(/^\s*\d+\.\s+/.test(line)){
-      const items=[];
-      while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){
-        items.push(lines[i].replace(/^\s*\d+\.\s+/,"")); i++;
-      }
-      html+="<ol>"+items.map(it=>`<li>${inline(escapeHtml(it))}</li>`).join("")+"</ol>";
+    // list — bullet or numbered, nested by indentation, GFM task items
+    if(LIST_ITEM.test(line)){
+      const [listHtml,next]=renderList(lines,i);
+      html+=listHtml; i=next;
       continue;
     }
     if(/^\s*$/.test(line)){ i++; continue; }
@@ -353,6 +371,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 ## To-do
 - [x] Write in markdown
 - [ ] Try the checklist
+  - [ ] Indent with Tab to nest an item
 - [ ] Press Ctrl+F to find & replace
 
 > Tip: press Enter inside a list and the next item continues automatically.
