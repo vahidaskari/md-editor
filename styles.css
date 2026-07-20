@@ -341,6 +341,29 @@ footer a { color: var(--accent); text-decoration: underline; }
   box-shadow: 0 12px 48px rgba(0,0,0,.4);
 }
 
+/* ---------- Link status bar (hover URL, like the browser's own) ---------- */
+.link-status {
+  position: fixed;
+  bottom: 0;
+  inset-inline-start: 0;
+  z-index: 90;
+  max-width: 60vw;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-inline-start: none;
+  border-start-end-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: ltr;        /* URLs read left-to-right even in an RTL document */
+  pointer-events: none;  /* never block a click underneath */
+}
+.link-status[hidden] { display: none; }
+
 /* ---------- Toast notifications ---------- */
 #toasts {
   position: fixed;

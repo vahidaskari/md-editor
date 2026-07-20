@@ -592,16 +592,35 @@ preview.addEventListener("change",e=>{
 ["pointerdown","focusin"].forEach(ev=>
   preview.addEventListener(ev,()=>{ ensureTurndown().catch(()=>{}); },{once:true}));
 
-// The preview is contenteditable, so a click would only drop the caret —
-// open links instead (edit their text on the markdown side).
-preview.addEventListener("click",e=>{
-  const a=e.target.closest("a");
-  if(!a) return;
-  const href=a.getAttribute("href");
-  if(!href || href==="#") return;
+/* Links inside contenteditable lose all their native behaviour (click,
+   middle-click, hover status bar) — rebuild each. Edits to a link's text
+   belong on the markdown side. */
+function linkHrefAt(target){
+  const a=target.closest("a");
+  const href=a && a.getAttribute("href");
+  return (href && href!=="#") ? href : null;   // "#" = neutered by sanitize()
+}
+function openLink(e){
+  const href=linkHrefAt(e.target);
+  if(!href) return;
   e.preventDefault();
   window.open(href,"_blank","noopener");
+}
+preview.addEventListener("click",openLink);
+preview.addEventListener("auxclick",e=>{ if(e.button===1) openLink(e); });
+// middle-pressing a link must not start the browser's autoscroll mode
+preview.addEventListener("mousedown",e=>{
+  if(e.button===1 && linkHrefAt(e.target)) e.preventDefault();
 });
+
+// Hover-URL status bar, like the browser's own (also suppressed in contenteditable)
+const linkStatus=document.getElementById("linkStatus");
+preview.addEventListener("mouseover",e=>{
+  const href=linkHrefAt(e.target);
+  if(href){ linkStatus.textContent=href; linkStatus.hidden=false; }
+  else linkStatus.hidden=true;
+});
+preview.addEventListener("mouseleave",()=>{ linkStatus.hidden=true; });
 
 function placeCaretAtEnd(node){
   const r=document.createRange();
@@ -1072,7 +1091,7 @@ fmtbar.addEventListener("mousedown",e=>e.preventDefault());
 document.addEventListener("mousedown",e=>{
   if(!fmtbar.hidden && !fmtbar.contains(e.target) && !preview.contains(e.target)) fmtbar.hidden=true;
 });
-window.addEventListener("scroll",()=>{ fmtbar.hidden=true; },{capture:true,passive:true});
+window.addEventListener("scroll",()=>{ fmtbar.hidden=true; linkStatus.hidden=true; },{capture:true,passive:true});
 window.addEventListener("resize",()=>{ fmtbar.hidden=true; });
 
 function wrapInline(tag){
