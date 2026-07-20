@@ -204,11 +204,15 @@ function renderLines(lines){
       while(i<lines.length && !/^```/.test(lines[i])){ code.push(lines[i]); i++; }
       i++;
       const body=code.join("\n");
-      if(fence[1].toLowerCase()==="mermaid")
+      // the info string becomes a language- class for §3d (and for Turndown,
+      // which reads it back when the preview is edited); anything that isn't a
+      // plain language name is dropped rather than escaped
+      const lang=/^[\w+#-]+$/.test(fence[1]) ? fence[1].toLowerCase() : "";
+      if(lang==="mermaid")
         html+=`<div class="mermaid-block" data-mmd="${attrValue(escapeHtml(body))}">`+
               `<pre><code>${escapeHtml(body)}</code></pre></div>`;
       else
-        html+=`<pre><code>${escapeHtml(body)}</code></pre>`;
+        html+=`<pre><code${lang?` class="language-${lang}"`:""}>${escapeHtml(body)}</code></pre>`;
       continue;
     }
     // display math: $$…$$ on one line, or a $$-fenced block over several
@@ -446,6 +450,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 - **Formatting toolbar** — select text or right-click inside the preview
 - **Find & replace** with \`Ctrl+F\`
 - **Checklists**, tables, code blocks, quotes and images
+- **Syntax highlighting** — name a language on a code fence
 - **Mermaid diagrams** — put one in a \`\`\`mermaid code block
 - **LaTeX math** — inline \$e^{i\\pi}+1=0\$ or full display equations
 - **Reading mode** — just your document, distraction-free (Esc to leave)
@@ -498,9 +503,8 @@ const MERMAID_ESM="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.esm
 let mermaidPromise=null, mermaidWarned=false, mermaidTimer=null, mermaidRun=0, mermaidSeq=0;
 const mermaidCache=new Map();   // diagram source -> rendered SVG markup
 
-function mermaidTheme(){
-  return document.documentElement.getAttribute("data-theme")==="dark" ? "dark" : "default";
-}
+function isDarkTheme(){ return document.documentElement.getAttribute("data-theme")==="dark"; }
+function mermaidTheme(){ return isDarkTheme() ? "dark" : "default"; }
 function mermaidInit(m,themeOverride){
   m.initialize({
     startOnLoad:false,
@@ -653,6 +657,75 @@ function scheduleMathRender(){
 }
 
 /* ============================================================
+   3d. Code syntax highlighting — highlight.js, lazy like the rest
+   ============================================================ */
+/* Only fenced blocks that named a language are touched, and the library is
+   fetched the first time one appears. highlight.js escapes its own output, so
+   injecting it straight into the block is safe — same trust model as the
+   diagram SVG and the KaTeX markup. Colours live entirely in its stylesheet:
+   the screen sheet follows the app theme, and a second sheet pinned to
+   media="print" keeps exported pages readable without any swap at print time. */
+const HLJS_BASE="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1";
+const hljsThemeUrl=dark=>HLJS_BASE+"/styles/github"+(dark?"-dark":"")+".min.css";
+const CODE_SELECTOR='pre code[class*="language-"]';
+let hljsPromise=null, hljsWarned=false, hljsTimer=null, hljsLink=null;
+const hljsCache=new Map();   // "lang\0source" → highlighted HTML
+
+function ensureHljs(){
+  if(!hljsPromise){
+    hljsLink=document.createElement("link");
+    hljsLink.rel="stylesheet";
+    hljsLink.media="screen";
+    hljsLink.href=hljsThemeUrl(isDarkTheme());
+    const printSheet=document.createElement("link");
+    printSheet.rel="stylesheet";
+    printSheet.media="print";
+    printSheet.href=hljsThemeUrl(false);
+    document.head.append(hljsLink,printSheet);
+    hljsPromise=loadScript(HLJS_BASE+"/highlight.min.js").then(()=>window.hljs);
+    hljsPromise.catch(()=>{ hljsPromise=null; }); // failed load may be retried
+  }
+  return hljsPromise;
+}
+
+async function highlightCode(){
+  const blocks=preview.querySelectorAll(CODE_SELECTOR);
+  if(!blocks.length) return;
+  let h;
+  try{ h=await ensureHljs(); }
+  catch{
+    if(!hljsWarned){
+      hljsWarned=true;
+      toast("Couldn't load the syntax highlighter — check your connection",true);
+    }
+    return; // code stays readable, just uncoloured
+  }
+  for(const el of blocks){
+    const lang=(el.className.match(/language-([\w+#-]+)/)||[])[1];
+    if(!lang || !h.getLanguage(lang)) continue;   // unknown language → leave it plain
+    const code=el.textContent;
+    const key=lang+"\0"+code;
+    let out=hljsCache.get(key);
+    if(out===undefined){
+      out=h.highlight(code,{language:lang,ignoreIllegals:true}).value;
+      if(hljsCache.size>200) hljsCache.clear();
+      hljsCache.set(key,out);
+    }
+    el.innerHTML=out;
+    el.classList.add("hljs");
+  }
+}
+
+function scheduleHighlight(){
+  if(!preview.querySelector(CODE_SELECTOR)) return;
+  clearTimeout(hljsTimer);
+  hljsTimer=setTimeout(highlightCode,300);
+}
+
+// theme switch only moves the screen sheet; the print sheet stays light
+function rethemeHljs(){ if(hljsLink) hljsLink.href=hljsThemeUrl(isDarkTheme()); }
+
+/* ============================================================
    4. Live render / autosave
    ============================================================ */
 function updateStats(text){
@@ -685,6 +758,7 @@ function update(){
          .forEach(el=>el.setAttribute("contenteditable","false"));
   scheduleMermaidRender();
   scheduleMathRender();
+  scheduleHighlight();
   persist(v);
   updateStats(v);
 }
@@ -1016,15 +1090,18 @@ async function exportHtml(){
   const body=preview.innerHTML;
   restoreDiagrams();
   const title=escapeHtml((editor.value.match(/^#\s+(.+)$/m)||[])[1] || "Document");
-  // formulas are KaTeX markup and need its stylesheet — link it only when used
+  // KaTeX and highlight.js markup carry no colours of their own — link their
+  // stylesheets (the light ones, for a document read on white) only when used
   const mathCss=preview.querySelector(".math-inline,.math-block")
     ? `\n<link rel="stylesheet" href="${KATEX_CSS}">` : "";
+  const codeCss=preview.querySelector("pre code.hljs")
+    ? `\n<link rel="stylesheet" href="${hljsThemeUrl(false)}">` : "";
   const doc=`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>${mathCss}
+<title>${title}</title>${mathCss}${codeCss}
 <style>
 body{max-width:800px;margin:2rem auto;padding:0 16px;color:#1f2328;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6}
@@ -1113,6 +1190,7 @@ document.getElementById("themeBtn").onclick=()=>{
   document.documentElement.setAttribute("data-theme",next);
   localStorage.setItem(THEME_KEY,next);
   rethemeMermaid(); // diagram colours are baked into the SVG at render time
+  rethemeHljs();
 };
 
 /* ============================================================

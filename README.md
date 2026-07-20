@@ -27,6 +27,7 @@ No build step. No server. No account. Just open it and write.
 - **Tables** — insert with a custom row/column count, with `:---:` column alignment
 - **Autolinks & inline HTML** — bare URLs become links; `<details>` blocks work
 - **Footnotes** — `text[^1]` with `[^1]: …` collects into a linked list at the end
+- **Syntax highlighting** — name a language on a fence (```` ```python ````) and the code is coloured
 - **Mermaid diagrams** — a ```` ```mermaid ```` code block renders as a live diagram (flowcharts, sequence, class, gantt…)
 - **LaTeX math** — inline `$…$` and display `$$…$$` formulas, rendered with KaTeX
 - **Reading mode** — hides all chrome and locks editing; just your rendered document
