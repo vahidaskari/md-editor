@@ -51,6 +51,8 @@ function inline(t){
   t = t.replace(/\\\$/g,"\x00D\x00")
        .replace(/\$([^$\n]+?)\$/g,(m,tex)=>
          /^\s|\s$/.test(tex) ? m : "\x00M"+(maths.push(tex)-1)+"\x00");
+  // footnote references — an undefined label stays literal text
+  t = t.replace(FOOTNOTE_REF,(m,label)=>footnoteRef(label) || m);
   // images ![alt](src)
   t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
       (m,alt,src,ti)=>`<img src="${safeSrc(src)}" alt="${attrValue(alt)}"${ti?` title="${attrValue(ti)}"`:""}>`);
@@ -78,6 +80,50 @@ function inline(t){
         `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`)
        .replace(/\x00D\x00/g,"$");
   return t;
+}
+
+/* Footnotes. Definitions may sit anywhere in the document but always render as
+   a numbered list at the end, so they need a document-wide pass. `fn` holds
+   that state: render() is synchronous and only re-enters itself for
+   blockquotes, so one context is enough — the outermost call always clears it.
+   Labels are word characters only, which keeps the reference (post-escaping)
+   and the definition (pre-escaping) spellings identical. */
+const FOOTNOTE_DEF=/^\[\^([\w-]+)\]:\s*(.*)$/;
+const FOOTNOTE_REF=/\[\^([\w-]+)\]/g;
+let fn=null;
+
+function extractFootnotes(lines){
+  const defs=new Map(), kept=[];
+  for(let i=0;i<lines.length;){
+    const m=lines[i].match(FOOTNOTE_DEF);
+    if(!m){ kept.push(lines[i]); i++; continue; }
+    const parts=[m[2]]; i++;
+    while(i<lines.length && /^\s+\S/.test(lines[i])){ parts.push(lines[i].trim()); i++; } // continuation
+    defs.set(m[1],parts.join(" ").trim());
+  }
+  return {defs,kept};
+}
+
+// a reference renders only if that label was defined; numbering follows first use
+function footnoteRef(label){
+  if(!fn || !fn.defs.has(label)) return null;
+  let num=fn.used.get(label), first=false;
+  if(num===undefined){ num=fn.used.size+1; fn.used.set(label,num); first=true; }
+  // only the first reference carries the id, so back-links never point at a duplicate
+  return `<sup class="fn-ref"${first?` id="fnref-${num}"`:""} data-fn="${attrValue(label)}">`+
+         `<a href="#fn-${num}">${num}</a></sup>`;
+}
+
+function footnotesHTML(){
+  if(!fn || !fn.used.size) return "";
+  const items=[...fn.used.entries()].sort((a,b)=>a[1]-b[1]).map(([label,num])=>{
+    const text=fn.defs.get(label);
+    // data-fn-src keeps the markdown source, so editing the preview round-trips
+    return `<li id="fn-${num}" data-fn="${attrValue(label)}" data-fn-src="${attrValue(escapeHtml(text))}">`+
+           `${inline(escapeHtml(text))} `+
+           `<a class="fn-back" href="#fnref-${num}" aria-label="Back to reference ${num}">↩</a></li>`;
+  }).join("");
+  return `<hr class="fn-sep"><ol class="footnotes">${items}</ol>`;
 }
 
 const TASK_ITEM=/^\[([ xX])\]\s+(.*)$/;
@@ -125,10 +171,26 @@ function renderList(lines,start){
 }
 
 function render(src){
-  const lines = src
+  let lines = src
     .replace(/<!--[\s\S]*?-->/g,"")   // HTML comments are hidden, as in real markdown
     .replace(/\r\n?/g,"\n")
     .split("\n");
+  // The outermost call owns the footnote context: it lifts every definition out
+  // of the flow up front, so a reference resolves even when defined further down.
+  const top=fn===null;
+  if(top){
+    const found=extractFootnotes(lines);
+    lines=found.kept;
+    fn={defs:found.defs,used:new Map()};
+  }
+  try{
+    return renderLines(lines)+(top?footnotesHTML():"");
+  }finally{
+    if(top) fn=null;   // never leave a stale context behind, even on a throw
+  }
+}
+
+function renderLines(lines){
   let html="", i=0;
   while(i<lines.length){
     const line=lines[i];
@@ -231,7 +293,12 @@ const ALLOWED_ATTRS=new Set(["align","alt","checked","class","colspan","dir","di
   "type","width",
   "data-mmd",    // inert diagram source for §3b — carries no executable surface
   "data-tex",    // inert math source for §3c — same story
+  "data-fn","data-fn-src", // footnote label + markdown source, for the round trip
+  "id",          // footnote anchors only — see FOOTNOTE_ANCHOR below
   "aria-label"]); // plain text for screen readers; the renderer puts it on checkboxes
+/* An arbitrary id from a document could shadow one of the app's own elements in
+   a later getElementById lookup, so only the ids this renderer generates survive. */
+const FOOTNOTE_ANCHOR=/^fn(ref)?-\d+$/;
 const domParser=new DOMParser();
 
 function sanitize(html){
@@ -243,6 +310,7 @@ function sanitize(html){
     for(const attr of [...el.attributes]){
       const name=attr.name.toLowerCase();
       if(!ALLOWED_ATTRS.has(name)){ el.removeAttribute(attr.name); continue; } // kills on* handlers
+      if(name==="id" && !FOOTNOTE_ANCHOR.test(attr.value)) el.removeAttribute("id");
       if(name==="href" && UNSAFE_SCHEME.test(attr.value)) el.setAttribute("href","#");
       if(name==="src" && !/^\s*data:image\//i.test(attr.value) && UNSAFE_SCHEME.test(attr.value))
         el.removeAttribute("src");
@@ -611,6 +679,10 @@ document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave
 function update(){
   const v=editor.value;
   preview.innerHTML=sanitize(render(v));
+  // the footnote list is generated, not authored — editing it would only
+  // confuse the round trip, so lock it like the diagrams and formulas
+  preview.querySelectorAll(".footnotes,.fn-sep")
+         .forEach(el=>el.setAttribute("contenteditable","false"));
   scheduleMermaidRender();
   scheduleMathRender();
   persist(v);
@@ -670,6 +742,23 @@ function getTurndown(){
   turndownSvc.addRule("mermaid",{
     filter:node=>node.nodeType===1 && node.classList.contains("mermaid-block"),
     replacement:(_,node)=>"\n\n```mermaid\n"+(node.getAttribute("data-mmd")||"")+"\n```\n\n"
+  });
+  /* Footnotes: references go back to [^label], the generated list back to the
+     definition lines it came from, and the separator and back-links vanish. */
+  turndownSvc.addRule("footnoteRef",{
+    filter:node=>node.nodeType===1 && node.classList.contains("fn-ref"),
+    replacement:(_,node)=>"[^"+(node.getAttribute("data-fn")||"1")+"]"
+  });
+  turndownSvc.addRule("footnoteList",{
+    filter:node=>node.nodeType===1 && node.classList.contains("footnotes"),
+    replacement:(_,node)=>"\n\n"+[...node.children]
+      .map(li=>"[^"+(li.getAttribute("data-fn")||"1")+"]: "+(li.getAttribute("data-fn-src")||""))
+      .join("\n")+"\n\n"
+  });
+  turndownSvc.addRule("footnoteChrome",{
+    filter:node=>node.nodeType===1 &&
+      (node.classList.contains("fn-sep") || node.classList.contains("fn-back")),
+    replacement:()=>""
   });
   // formulas round-trip via data-tex, never via KaTeX's rendered markup
   turndownSvc.addRule("math",{
@@ -738,6 +827,12 @@ function openLink(e){
   const href=linkHrefAt(e.target);
   if(!href) return;
   e.preventDefault();
+  if(href.startsWith("#")){   // in-page anchor (footnotes) — scroll, don't open a tab
+    const id=href.slice(1);
+    const target=[...preview.querySelectorAll("[id]")].find(el=>el.id===id);
+    if(target) target.scrollIntoView({behavior:"smooth",block:"center"});
+    return;
+  }
   window.open(href,"_blank","noopener");
 }
 preview.addEventListener("click",openLink);
@@ -947,6 +1042,10 @@ hr{border:none;border-top:1px solid #d0d7de}
 ul.task-list{list-style:none;padding-left:.3em}
 li.task-item{list-style:none}
 .mermaid-block,.math-block{margin:1em 0;text-align:center;overflow-x:auto}
+.fn-sep{margin-top:2.5em}
+.footnotes{font-size:.9em;color:#656d76}
+sup.fn-ref a,.fn-back{text-decoration:none}
+.fn-back{margin-left:4px}
 .mermaid-error{color:#d1242f;font-size:13px;text-align:left}
 </style>
 </head>

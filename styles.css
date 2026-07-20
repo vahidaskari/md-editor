@@ -209,6 +209,14 @@ textarea {
   text-align: start;
   margin-bottom: 6px;
 }
+/* Footnotes (collected at the end of the document by app.js §1) */
+.preview .fn-sep { margin-top: 2.5em; }
+.preview .footnotes { font-size: .9em; color: var(--muted); }
+.preview .footnotes li { margin: .3em 0; }
+.preview sup.fn-ref a,
+.preview .fn-back { text-decoration: none; }
+.preview .fn-back { margin-inline-start: 4px; }
+
 /* LaTeX math (rendered by app.js §3c) */
 .preview .math-block {
   margin: 1em 0;
