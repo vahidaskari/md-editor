@@ -369,10 +369,6 @@ function mermaidInit(m,themeOverride){
     securityLevel:"strict",       // labels escaped; scripts and click bindings blocked
     suppressErrorRendering:true,  // errors go to our catch, not into the document
     theme:themeOverride||mermaidTheme(),
-    // The PDF exporter draws via html2canvas, which can't paint <foreignObject>
-    // HTML labels — force plain SVG <text> labels instead.
-    htmlLabels:false,
-    flowchart:{htmlLabels:false},
   });
 }
 function ensureMermaid(){
@@ -501,13 +497,11 @@ editor.addEventListener("input",update);
 preview.contentEditable="true";
 preview.spellcheck=false;
 
-/* Third-party libraries are fetched the first time they're actually needed, not
-   on page load. html2pdf alone is 234 KB — keeping it off the critical path is
-   the single biggest win for first paint on a slow connection. */
+/* Third-party libraries are fetched the first time they're actually needed,
+   never on page load — first paint owes the network nothing but this file. */
 const CDN={
   turndown:    "https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.min.js",
   turndownGfm: "https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.min.js",
-  html2pdf:    "https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js",
 };
 const scriptPromises=new Map();
 function loadScript(src){
@@ -525,10 +519,6 @@ function loadScript(src){
 function ensureTurndown(){
   if(typeof TurndownService!=="undefined") return Promise.resolve();
   return loadScript(CDN.turndown).then(()=>loadScript(CDN.turndownGfm));
-}
-function ensureHtml2Pdf(){
-  if(typeof html2pdf!=="undefined") return Promise.resolve();
-  return loadScript(CDN.html2pdf);
 }
 
 let turndownSvc=null;
@@ -821,70 +811,14 @@ ${body}
   toast("Saved document.html");
 }
 
+/* PDF via the browser's own print engine (the @media print rules in styles.css
+   do the page setup). Vector output: sharp diagrams and selectable, searchable
+   text in every script — things an image-based exporter can never produce. */
 async function exportPdf(){
-  toast("Generating PDF…");
-  try{ await ensureHtml2Pdf(); }          // 234 KB, fetched only on first export
-  catch{ toast("Couldn't load the PDF engine — check your connection",true); return; }
-  preview.classList.add("pdf-export");
+  toast('Choose "Save as PDF" in the print dialog');
   const restoreDiagrams=await lightenDiagramsForExport();
-  // html2canvas draws inline SVG through its own serialize-to-image path, which
-  // ignores document CSS (max-width:100%) — wide diagrams came out cropped.
-  // Sidestep that path entirely: rasterise each diagram to a PNG <img> for the
-  // capture (the same reliable path markdown images take), restore afterwards.
-  const swapped=[];
-  for(const svg of preview.querySelectorAll(".mermaid-block svg")){
-    try{
-      const img=document.createElement("img");
-      img.src=await mermaidSvgToPng(svg);
-      img.style.maxWidth="100%";
-      swapped.push({svg,img});
-      svg.replaceWith(img);
-    }catch{ /* leave this one as SVG — worst case it exports as before */ }
-  }
-  const unswap=()=>swapped.forEach(({svg,img})=>img.replaceWith(svg));
-  try{
-    // Build the PDF as a Blob, then force a download (never opens in a tab)
-    const blob=await html2pdf().set({
-      margin:[10,10,10,10],
-      image:{type:"jpeg",quality:0.98},
-      html2canvas:{scale:2,backgroundColor:"#ffffff",useCORS:true},
-      jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},
-      pagebreak:{mode:["css","legacy"]}
-    }).from(preview).outputPdf("blob");
-    downloadBlob("document.pdf",blob);
-    toast("PDF downloaded ✓");
-  }catch{
-    toast("PDF export failed",true);
-  }finally{
-    unswap();
-    restoreDiagrams();
-    preview.classList.remove("pdf-export");
-  }
-}
-
-// Rasterise a rendered mermaid SVG to a PNG data URL at 2x its on-screen size
-// (matching the html2canvas scale:2 capture, so it stays sharp in the PDF).
-async function mermaidSvgToPng(svg){
-  const r=svg.getBoundingClientRect();
-  const W=Math.max(1,Math.round(r.width)), H=Math.max(1,Math.round(r.height));
-  // serialize a copy with explicit pixel dimensions — an <img> needs an
-  // intrinsic size, and Firefox won't draw an svg image without one
-  const copy=svg.cloneNode(true);
-  copy.setAttribute("width",W);
-  copy.setAttribute("height",H);
-  copy.style.maxWidth="";
-  const xml=new XMLSerializer().serializeToString(copy);
-  const img=new Image();
-  await new Promise((res,rej)=>{
-    img.onload=res;
-    img.onerror=()=>rej(new Error("svg rasterise failed"));
-    img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(xml);
-  });
-  const canvas=document.createElement("canvas");
-  canvas.width=W*2;
-  canvas.height=H*2;
-  canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
-  return canvas.toDataURL("image/png");
+  try{ window.print(); }        // blocks while the dialog is open
+  finally{ restoreDiagrams(); }
 }
 
 /* ============================================================

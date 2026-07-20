@@ -440,25 +440,14 @@ footer a { color: var(--accent); text-decoration: underline; }
 .modal .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .modal .primary:hover { filter: brightness(1.08); color: var(--on-accent); }
 
-/* ---------- Light rendering for PDF export & printing ----------
-   Every rule inside .preview already reads the theme tokens, and custom
-   properties inherit — so re-pointing the tokens on .preview alone turns the
-   whole subtree light. No per-element overrides, no !important. */
-.preview.pdf-export {
-  --bg: #ffffff;
-  --text: #000000;
-  --muted: #555555;
-  --border: #cccccc;
-  --code-bg: #f5f5f5;
-  --accent: #0645ad;
-  color: var(--text);
-  background: var(--bg);
-  padding: 24px;
-}
-
-/* Native browser printing (Ctrl+P) — prints just the rendered document */
+/* ---------- Print / Export→PDF (the browser's print engine) ----------
+   Zero @page margin leaves the browser nowhere to draw its own header/footer
+   (URL, title, date), so none appears; the .preview padding recreates the page
+   margins instead. Trade-off: on multi-page documents the inner page breaks
+   run closer to the paper edge than a real margin would. */
+@page { margin: 0; }
 @media print {
-  header, footer, #toasts, #fmtbar, #findbar,
+  header, footer, #toasts, #fmtbar, #findbar, #linkStatus, #readExit,
   .edit-pane, .divider { display: none !important; }
   body, .main, .preview-pane, .preview {
     display: block !important;
@@ -466,6 +455,8 @@ footer a { color: var(--accent); text-decoration: underline; }
     overflow: visible !important;
   }
   .preview {
+    /* every rule inside .preview reads the theme tokens and custom properties
+       inherit — re-pointing them here turns the whole subtree light */
     --bg: #ffffff;
     --text: #000000;
     --muted: #555555;
@@ -474,7 +465,7 @@ footer a { color: var(--accent); text-decoration: underline; }
     --accent: #0645ad;
     color: var(--text);
     background: var(--bg);
-    padding: 0;
+    padding: 15mm 18mm;
   }
 }
 
