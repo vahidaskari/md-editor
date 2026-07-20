@@ -64,6 +64,15 @@ function inline(t){
        .replace(/(^|[^_])_([^_]+)_/g,"$1<em>$2</em>")
        .replace(/~~([^~]+)~~/g,"<del>$1</del>")
        .replace(/`([^`]+)`/g,(m,c)=>`<code>${escapeHtml(c)}</code>`);
+  // Autolink bare URLs. The leading alternatives swallow existing links, code
+  // spans and any other tag first, so the capture group only ever fires on
+  // plain text — a URL already inside href="…" is never touched. Trailing
+  // sentence punctuation is left out of the link.
+  t = t.replace(
+    /<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>|<[^>]+>|(https?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]])/g,
+    (m,url)=>url
+      ? `<a href="${safeHref(url)}" target="_blank" rel="noopener noreferrer">${url}</a>`
+      : m);
   // put the math back: a placeholder §3c fills in, raw TeX as the fallback
   t = t.replace(/\x00M(\d+)\x00/g,(m,i)=>
         `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`)
@@ -156,9 +165,13 @@ function render(src){
             `<code>${escapeHtml(body)}</code></div>`;
       continue;
     }
-    // raw HTML block — a line holding just a tag, e.g. <div align="center">.
-    // Passed through verbatim; sanitize() scrubs it before it reaches the DOM.
-    if(/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line)){ html+=line; i++; continue; }
+    // Raw HTML block: a lone tag (<div align="center">) or one complete element
+    // on its own line (<summary>Details</summary>). Passed through verbatim;
+    // sanitize() scrubs it before it reaches the DOM.
+    if(/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line) ||
+       /^\s*<([a-zA-Z][\w-]*)\b[^>]*>.*<\/\1>\s*$/.test(line)){
+      html+=line; i++; continue;
+    }
     // heading
     const h=line.match(/^(#{1,6})\s+(.*)$/);
     if(h){ html+=`<h${h[1].length}>${inline(escapeHtml(h[2]))}</h${h[1].length}>`; i++; continue; }
@@ -174,11 +187,18 @@ function render(src){
     // table
     if(/^\s*\|.*\|\s*$/.test(line) && i+1<lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1])){
       const parseRow=r=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      // the delimiter row carries per-column alignment: :--- ---: :---:
+      const align=parseRow(lines[i+1]).map(d=>{
+        const l=d.startsWith(":"), r=d.endsWith(":");
+        return l&&r ? ' align="center"' : r ? ' align="right"' : l ? ' align="left"' : "";
+      });
+      const cell=(tag,c,n)=>`<${tag}${align[n]||""}>${inline(escapeHtml(c))}</${tag}>`;
       const head=parseRow(line); i+=2; let body="";
       while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){
-        body+="<tr>"+parseRow(lines[i]).map(c=>`<td>${inline(escapeHtml(c))}</td>`).join("")+"</tr>"; i++;
+        body+="<tr>"+parseRow(lines[i]).map((c,n)=>cell("td",c,n)).join("")+"</tr>"; i++;
       }
-      html+=`<table><thead><tr>${head.map(c=>`<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+      html+=`<table><thead><tr>${head.map((c,n)=>cell("th",c,n)).join("")}</tr></thead>`+
+            `<tbody>${body}</tbody></table>`;
       continue;
     }
     // list — bullet or numbered, nested by indentation, GFM task items

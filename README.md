@@ -23,7 +23,9 @@ No build step. No server. No account. Just open it and write.
 - **Formatting toolbar** — select text or right-click inside the preview for bold, italic, code, headings, lists, links and tables
 - **Find & replace** — `Ctrl/Cmd + F`, with match count and undo support
 - **Checklists** — `- [ ]` / `- [x]` render as real checkboxes you can tick
-- **Tables** — insert with a custom row/column count
+- **Nested lists** — indent to nest bullets, numbers and checkboxes to any depth
+- **Tables** — insert with a custom row/column count, with `:---:` column alignment
+- **Autolinks & inline HTML** — bare URLs become links; `<details>` blocks work
 - **Mermaid diagrams** — a ```` ```mermaid ```` code block renders as a live diagram (flowcharts, sequence, class, gantt…)
 - **LaTeX math** — inline `$…$` and display `$$…$$` formulas, rendered with KaTeX
 - **Reading mode** — hides all chrome and locks editing; just your rendered document
