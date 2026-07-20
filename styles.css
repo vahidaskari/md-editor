@@ -209,6 +209,13 @@ textarea {
   text-align: start;
   margin-bottom: 6px;
 }
+/* LaTeX math (rendered by app.js §3c) */
+.preview .math-block {
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;    /* a wide equation scrolls inside its block */
+  break-inside: avoid;
+}
 .preview :first-child { margin-top: 0; }
 
 /* ---------- Reading mode ---------- */

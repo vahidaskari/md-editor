@@ -44,6 +44,13 @@ function safeSrc(u){
 }
 
 function inline(t){
+  // Math is pulled out FIRST and re-inserted last, so TeX like a_b^* is never
+  // mangled by the emphasis/code replacements below. `\$` stays a literal $,
+  // and "$ 5 and $10" style prices are left alone (space-padded ≠ math).
+  const maths=[];
+  t = t.replace(/\\\$/g,"\x00D\x00")
+       .replace(/\$([^$\n]+?)\$/g,(m,tex)=>
+         /^\s|\s$/.test(tex) ? m : "\x00M"+(maths.push(tex)-1)+"\x00");
   // images ![alt](src)
   t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
       (m,alt,src,ti)=>`<img src="${safeSrc(src)}" alt="${attrValue(alt)}"${ti?` title="${attrValue(ti)}"`:""}>`);
@@ -57,6 +64,10 @@ function inline(t){
        .replace(/(^|[^_])_([^_]+)_/g,"$1<em>$2</em>")
        .replace(/~~([^~]+)~~/g,"<del>$1</del>")
        .replace(/`([^`]+)`/g,(m,c)=>`<code>${escapeHtml(c)}</code>`);
+  // put the math back: a placeholder §3c fills in, raw TeX as the fallback
+  t = t.replace(/\x00M(\d+)\x00/g,(m,i)=>
+        `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`)
+       .replace(/\x00D\x00/g,"$");
   return t;
 }
 
@@ -96,6 +107,22 @@ function render(src){
               `<pre><code>${escapeHtml(body)}</code></pre></div>`;
       else
         html+=`<pre><code>${escapeHtml(body)}</code></pre>`;
+      continue;
+    }
+    // display math: $$…$$ on one line, or a $$-fenced block over several
+    const dm=line.match(/^\s*\$\$(.*)$/);
+    if(dm){
+      let body;
+      const close=dm[1].indexOf("$$");
+      if(close!==-1){ body=dm[1].slice(0,close); i++; }
+      else{
+        const tex=[dm[1]]; i++;
+        while(i<lines.length && !/^\s*\$\$\s*$/.test(lines[i])){ tex.push(lines[i]); i++; }
+        i++;
+        body=tex.join("\n").trim();
+      }
+      html+=`<div class="math-block" data-tex="${attrValue(escapeHtml(body))}">`+
+            `<code>${escapeHtml(body)}</code></div>`;
       continue;
     }
     // raw HTML block — a line holding just a tag, e.g. <div align="center">.
@@ -146,7 +173,7 @@ function render(src){
     // paragraph (collect until blank line or a block start)
     const para=[];
     while(i<lines.length && !/^\s*$/.test(lines[i]) &&
-          !/^(#{1,6}\s|>|\s*[-*+]\s|\s*\d+\.\s|```|(\s*[-*_]){3,}\s*$)/.test(lines[i])){
+          !/^(#{1,6}\s|>|\s*[-*+]\s|\s*\d+\.\s|```|\s*\$\$|(\s*[-*_]){3,}\s*$)/.test(lines[i])){
       para.push(lines[i]); i++;
     }
     html+=`<p>${inline(escapeHtml(para.join("\n"))).replace(/\n/g,"<br>")}</p>`;
@@ -165,6 +192,7 @@ const ALLOWED_ATTRS=new Set(["align","alt","checked","class","colspan","dir","di
   "height","href","open","rel","rowspan","span","src","srcset","start","target","title",
   "type","width",
   "data-mmd",    // inert diagram source for §3b — carries no executable surface
+  "data-tex",    // inert math source for §3c — same story
   "aria-label"]); // plain text for screen readers; the renderer puts it on checkboxes
 const domParser=new DOMParser();
 
@@ -313,6 +341,7 @@ A **simple**, fast markdown editor that runs entirely in your browser — no bui
 - **Find & replace** with \`Ctrl+F\`
 - **Checklists**, tables, code blocks, quotes and images
 - **Mermaid diagrams** — put one in a \`\`\`mermaid code block
+- **LaTeX math** — inline \$e^{i\\pi}+1=0\$ or full display equations
 - **Reading mode** — just your document, distraction-free (Esc to leave)
 - **Dark / light** themes and **RTL / LTR** text direction
 - **Resizable panes** — drag the divider, double-click to reset
@@ -339,6 +368,8 @@ graph LR
   C -->|yes| D[Export PDF]
   C -->|no| A
 \`\`\`
+
+$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}$$
 
 | Shortcut | Action |
 | --- | --- |
@@ -453,6 +484,68 @@ function rethemeMermaid(){
 }
 
 /* ============================================================
+   3c. LaTeX math — KaTeX, same lazy pattern as the diagrams
+   ============================================================ */
+/* The renderer emits .math-inline / .math-block placeholders (TeX source in
+   data-tex, the raw TeX as visible fallback). KaTeX + its stylesheet load only
+   once a document actually contains math. Its output is injected AFTER
+   sanitize(), so the allowlist stays closed. */
+const KATEX_VER="0.18.1";
+const KATEX_JS ="https://cdn.jsdelivr.net/npm/katex@"+KATEX_VER+"/dist/katex.min.js";
+const KATEX_CSS="https://cdn.jsdelivr.net/npm/katex@"+KATEX_VER+"/dist/katex.min.css";
+let katexPromise=null, katexWarned=false, katexTimer=null;
+const katexCache=new Map();     // "d:"/"i:" + tex → rendered HTML
+
+function ensureKatex(){
+  if(!katexPromise){
+    const css=document.createElement("link");
+    css.rel="stylesheet";
+    css.href=KATEX_CSS;
+    document.head.appendChild(css);
+    katexPromise=loadScript(KATEX_JS).then(()=>window.katex);
+    katexPromise.catch(()=>{ katexPromise=null; }); // failed load may be retried
+  }
+  return katexPromise;
+}
+
+async function renderMathEls(){
+  const els=preview.querySelectorAll(".math-inline,.math-block");
+  if(!els.length) return;
+  let k;
+  try{ k=await ensureKatex(); }
+  catch{
+    if(!katexWarned){
+      katexWarned=true;
+      toast("Couldn't load the math engine — check your connection",true);
+    }
+    return; // the raw-TeX fallback stays visible
+  }
+  for(const el of els){
+    const tex=el.dataset.tex || "";
+    const display=el.classList.contains("math-block");
+    const key=(display?"d:":"i:")+tex;
+    let out=katexCache.get(key);
+    if(out===undefined){
+      // throwOnError:false renders bad TeX in red instead of breaking the pass
+      out=k.renderToString(tex,{displayMode:display,throwOnError:false,errorColor:"#f85149"});
+      if(katexCache.size>300) katexCache.clear();
+      katexCache.set(key,out);
+    }
+    el.innerHTML=out;
+  }
+}
+
+function scheduleMathRender(){
+  const els=preview.querySelectorAll(".math-inline,.math-block");
+  if(!els.length) return;
+  // lock immediately, like the diagrams: Turndown must never see edited KaTeX
+  // markup — data-tex is the only editable form of a formula
+  els.forEach(el=>el.setAttribute("contenteditable","false"));
+  clearTimeout(katexTimer);
+  katexTimer=setTimeout(renderMathEls,300);
+}
+
+/* ============================================================
    4. Live render / autosave
    ============================================================ */
 function updateStats(text){
@@ -480,6 +573,7 @@ function update(){
   const v=editor.value;
   preview.innerHTML=sanitize(render(v));
   scheduleMermaidRender();
+  scheduleMathRender();
   persist(v);
   updateStats(v);
 }
@@ -537,6 +631,17 @@ function getTurndown(){
   turndownSvc.addRule("mermaid",{
     filter:node=>node.nodeType===1 && node.classList.contains("mermaid-block"),
     replacement:(_,node)=>"\n\n```mermaid\n"+(node.getAttribute("data-mmd")||"")+"\n```\n\n"
+  });
+  // formulas round-trip via data-tex, never via KaTeX's rendered markup
+  turndownSvc.addRule("math",{
+    filter:node=>node.nodeType===1 &&
+      (node.classList.contains("math-inline") || node.classList.contains("math-block")),
+    replacement:(_,node)=>{
+      const tex=node.getAttribute("data-tex")||"";
+      return node.classList.contains("math-block")
+        ? "\n\n$$\n"+tex+"\n$$\n\n"
+        : "$"+tex+"$";
+    }
   });
   return turndownSvc;
 }
@@ -777,12 +882,15 @@ async function exportHtml(){
   const body=preview.innerHTML;
   restoreDiagrams();
   const title=escapeHtml((editor.value.match(/^#\s+(.+)$/m)||[])[1] || "Document");
+  // formulas are KaTeX markup and need its stylesheet — link it only when used
+  const mathCss=preview.querySelector(".math-inline,.math-block")
+    ? `\n<link rel="stylesheet" href="${KATEX_CSS}">` : "";
   const doc=`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>
+<title>${title}</title>${mathCss}
 <style>
 body{max-width:800px;margin:2rem auto;padding:0 16px;color:#1f2328;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6}
@@ -799,7 +907,7 @@ a{color:#0969da}
 hr{border:none;border-top:1px solid #d0d7de}
 ul.task-list{list-style:none;padding-left:.3em}
 li.task-item{list-style:none}
-.mermaid-block{margin:1em 0;text-align:center;overflow-x:auto}
+.mermaid-block,.math-block{margin:1em 0;text-align:center;overflow-x:auto}
 .mermaid-error{color:#d1242f;font-size:13px;text-align:left}
 </style>
 </head>
