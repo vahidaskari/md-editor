@@ -5,6 +5,8 @@
      2. UI helpers (toast + confirm modal)
      3. State & elements
     3b. Mermaid diagrams (lazy ESM import)
+    3c. LaTeX math (KaTeX, lazy)
+    3d. Code syntax highlighting (highlight.js, lazy)
      4. Live render / autosave
      5. Editable preview (HTML → markdown via Turndown)
      6. Editor keyboard shortcuts
@@ -22,7 +24,7 @@
     17. Find & Replace (Ctrl/Cmd+F)
    ============================================================ */
 
-/* Wrapped so none of the ~90 names below leak into window, where they could
+/* Wrapped so none of the ~160 names below leak into window, where they could
    collide with a CDN library (this file defines render, update, save, main…).
    An IIFE rather than type="module" so the app still opens from file://. */
 (function(){
