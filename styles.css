@@ -211,6 +211,15 @@ textarea {
   text-align: start;
   margin-bottom: 6px;
 }
+/* YAML front matter — a dim metadata panel, not part of the prose */
+.preview .front-matter {
+  color: var(--muted);
+  background: var(--code-bg);
+  border-inline-start: 3px solid var(--border);
+  font-size: 85%;
+  margin-bottom: 1.2em;
+}
+
 /* Footnotes (collected at the end of the document by app.js §1) */
 .preview .fn-sep { margin-top: 2.5em; }
 .preview .footnotes { font-size: .9em; color: var(--muted); }

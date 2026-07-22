@@ -35,6 +35,13 @@
    ============================================================ */
 function escapeHtml(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
+/* Which raw-HTML tags may sit on their own line as a block. Inline tags are
+   deliberately absent so they render inside a paragraph instead (see render). */
+const BLOCK_HTML=new Set(["div","details","summary","figure","figcaption",
+  "blockquote","hr","table","thead","tbody","tfoot","tr","td","th","caption",
+  "ul","ol","li","dl","dt","dd","p","pre","section","article","aside","header",
+  "footer","nav","main","picture","source","h1","h2","h3","h4","h5","h6"]);
+
 /* Attribute/URL safety. Text reaching inline() is already HTML-escaped by
    escapeHtml (& < >), so only quotes still need escaping here. */
 const UNSAFE_SCHEME=/^\s*(?:javascript|vbscript|data)\s*:/i;
@@ -45,14 +52,25 @@ function safeSrc(u){
   return UNSAFE_SCHEME.test(u) ? "" : attrValue(u);
 }
 
+// inline HTML tags passed through verbatim (sanitize() re-checks them against
+// ALLOWED_TAGS afterwards, so this only decides what reaches the sanitizer)
+const INLINE_HTML=/&lt;(\/?)(sub|sup|kbd|mark|u|s|small|abbr|cite|q|samp|var|ins|del|b|i|em|strong|br)\s*(\/?)&gt;/gi;
+
 function inline(t){
-  // Math is pulled out FIRST and re-inserted last, so TeX like a_b^* is never
-  // mangled by the emphasis/code replacements below. `\$` stays a literal $,
-  // and "$ 5 and $10" style prices are left alone (space-padded ≠ math).
+  /* Backslash escapes: "\X" for an ASCII-punctuation X becomes a literal X,
+     tucked into a placeholder so no later rule reads it as syntax; restored
+     last. < > & arrive pre-escaped as entities, so handle those spellings too.
+     This also subsumes "\$", which just becomes a literal $ (never math). */
+  const lits=[];
+  const hide=ch=>"\x00E"+(lits.push(ch)-1)+"\x00";
+  t = t.replace(/\\&(lt|gt|amp|quot);/g,(m,e)=>hide("&"+e+";"))
+       .replace(/\\([\\`*_{}\[\]()#+\-.!~>|$])/g,(m,ch)=>hide(ch));
+
+  // Math is pulled out next and re-inserted late, so TeX like a_b^* is never
+  // mangled by the emphasis pass. "$ 5 and $10" prices (space-padded) aren't math.
   const maths=[];
-  t = t.replace(/\\\$/g,"\x00D\x00")
-       .replace(/\$([^$\n]+?)\$/g,(m,tex)=>
-         /^\s|\s$/.test(tex) ? m : "\x00M"+(maths.push(tex)-1)+"\x00");
+  t = t.replace(/\$([^$\n]+?)\$/g,(m,tex)=>
+        /^\s|\s$/.test(tex) ? m : "\x00M"+(maths.push(tex)-1)+"\x00");
   // footnote references — an undefined label stays literal text
   t = t.replace(FOOTNOTE_REF,(m,label)=>footnoteRef(label) || m);
   // images ![alt](src)
@@ -66,13 +84,21 @@ function inline(t){
       (m,bang,txt,label)=>referenceHTML(txt,label,bang==="!") || m);
   t = t.replace(/(!?)\[([^\]]+)\]/g,
       (m,bang,txt)=>referenceHTML(txt,"",bang==="!") || m);
-  // bold, italic, strikethrough, inline code
-  t = t.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
-       .replace(/__([^_]+)__/g,"<strong>$1</strong>")
+  // bold / italic / strike / code. The (?!\s)…(?<![\s*]) guards let ** span
+  // inner single *, so "**bold *italic* bold**" nests, without breaking "***x***".
+  t = t.replace(/\*\*(?!\s)(.+?)(?<![\s*])\*\*/g,"<strong>$1</strong>")
+       .replace(/__(?!\s)(.+?)(?<![\s_])__/g,"<strong>$1</strong>")
        .replace(/(^|[^*])\*([^*]+)\*/g,"$1<em>$2</em>")
        .replace(/(^|[^_])_([^_]+)_/g,"$1<em>$2</em>")
        .replace(/~~([^~]+)~~/g,"<del>$1</del>")
        .replace(/`([^`]+)`/g,(m,c)=>`<code>${escapeHtml(c)}</code>`);
+  // angle autolinks <url> and <email> (arrive escaped as &lt;…&gt;)
+  t = t.replace(/&lt;(https?:\/\/[^\s&]+?)&gt;/g,
+        (m,u)=>`<a href="${safeHref(u)}" target="_blank" rel="noopener noreferrer">${u}</a>`)
+       .replace(/&lt;([^\s@&]+@[^\s@&]+\.[^\s&]+?)&gt;/g,
+        (m,e)=>`<a href="mailto:${attrValue(e)}">${e}</a>`);
+  // restore the inline HTML tags that were escaped on the way in
+  t = t.replace(INLINE_HTML,(m,close,tag,selfclose)=>`<${close}${tag}${selfclose}>`);
   // Autolink bare URLs. The leading alternatives swallow existing links, code
   // spans and any other tag first, so the capture group only ever fires on
   // plain text — a URL already inside href="…" is never touched. Trailing
@@ -82,10 +108,10 @@ function inline(t){
     (m,url)=>url
       ? `<a href="${safeHref(url)}" target="_blank" rel="noopener noreferrer">${url}</a>`
       : m);
-  // put the math back: a placeholder §3c fills in, raw TeX as the fallback
+  // put the math back (a placeholder §3c fills in), then the escaped literals
   t = t.replace(/\x00M(\d+)\x00/g,(m,i)=>
-        `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`)
-       .replace(/\x00D\x00/g,"$");
+        `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`);
+  t = t.replace(/\x00E(\d+)\x00/g,(m,i)=>lits[i]);
   return t;
 }
 
@@ -217,13 +243,26 @@ function render(src){
   // The outermost call owns the document context: it lifts every definition out
   // of the flow up front, so a reference resolves even when defined further down.
   const top=doc===null;
+  let fmHtml="";
   if(top){
+    // A leading --- … --- block is YAML front matter (common on GitHub Pages).
+    // Show it as a dim, locked metadata panel — data-fm carries the source so a
+    // preview edit round-trips it back instead of dropping it.
+    if(lines[0]==="---"){
+      const end=lines.indexOf("---",1);
+      if(end!==-1){
+        const raw=lines.slice(1,end).join("\n");
+        fmHtml=`<pre class="front-matter" data-fm="${attrValue(escapeHtml(raw))}">`+
+               `${escapeHtml(raw)}</pre>`;
+        lines=lines.slice(end+1);
+      }
+    }
     const found=extractDefinitions(lines);
     lines=found.kept;
     doc={notes:found.notes,noteUse:new Map(),refs:found.refs};
   }
   try{
-    return renderLines(lines)+(top?footnotesHTML():"");
+    return fmHtml+renderLines(lines)+(top?footnotesHTML():"");
   }finally{
     if(top) doc=null;   // never leave a stale context behind, even on a throw
   }
@@ -270,11 +309,15 @@ function renderLines(lines){
             `<code>${escapeHtml(body)}</code></div>`;
       continue;
     }
-    // Raw HTML block: a lone tag (<div align="center">) or one complete element
-    // on its own line (<summary>Details</summary>). Passed through verbatim;
-    // sanitize() scrubs it before it reaches the DOM.
-    if(/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line) ||
-       /^\s*<([a-zA-Z][\w-]*)\b[^>]*>.*<\/\1>\s*$/.test(line)){
+    // Raw HTML block — a lone block-level tag (<div align="center">) or one
+    // complete block element on its own line (<summary>Details</summary>).
+    // Passed through verbatim; sanitize() scrubs it. Inline elements (<u>,
+    // <kbd>, <sub>…) are NOT taken here — they fall through to the paragraph
+    // path, where inline() renders them inside a <p> instead of running loose.
+    const rawTag=line.match(/^\s*<\/?([a-zA-Z][\w-]*)/);
+    if(rawTag && BLOCK_HTML.has(rawTag[1].toLowerCase()) &&
+       (/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line) ||
+        /^\s*<([a-zA-Z][\w-]*)\b[^>]*>.*<\/\1>\s*$/.test(line))){
       html+=line; i++; continue;
     }
     // heading
@@ -336,6 +379,7 @@ const ALLOWED_ATTRS=new Set(["align","alt","checked","class","colspan","dir","di
   "type","width",
   "data-mmd",    // inert diagram source for §3b — carries no executable surface
   "data-tex",    // inert math source for §3c — same story
+  "data-fm",     // inert front-matter source, for the round trip
   "data-fn","data-fn-src", // footnote label + markdown source, for the round trip
   "id",          // footnote anchors only — see FOOTNOTE_ANCHOR below
   "aria-label"]); // plain text for screen readers; the renderer puts it on checkboxes
@@ -932,9 +976,9 @@ document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave
 function update(){
   const v=editor.value;
   preview.innerHTML=sanitize(render(v));
-  // the footnote list is generated, not authored — editing it would only
-  // confuse the round trip, so lock it like the diagrams and formulas
-  preview.querySelectorAll(".footnotes,.fn-sep")
+  // generated blocks (footnote list, front-matter panel) aren't hand-editable —
+  // lock them like the diagrams and formulas so the round trip stays intact
+  preview.querySelectorAll(".footnotes,.fn-sep,.front-matter")
          .forEach(el=>el.setAttribute("contenteditable","false"));
   scheduleMermaidRender();
   scheduleMathRender();
@@ -1072,6 +1116,11 @@ function getTurndown(){
     filter:node=>node.nodeType===1 &&
       (node.classList.contains("fn-sep") || node.classList.contains("fn-back")),
     replacement:()=>""
+  });
+  // front matter round-trips via data-fm, back into a --- … --- block
+  turndownSvc.addRule("frontMatter",{
+    filter:node=>node.nodeType===1 && node.classList.contains("front-matter"),
+    replacement:(_,node)=>"---\n"+(node.getAttribute("data-fm")||"")+"\n---\n\n"
   });
   // formulas round-trip via data-tex, never via KaTeX's rendered markup
   turndownSvc.addRule("math",{
