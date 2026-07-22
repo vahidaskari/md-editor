@@ -40,7 +40,8 @@ function escapeHtml(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").repl
 const BLOCK_HTML=new Set(["div","details","summary","figure","figcaption",
   "blockquote","hr","table","thead","tbody","tfoot","tr","td","th","caption",
   "ul","ol","li","dl","dt","dd","p","pre","section","article","aside","header",
-  "footer","nav","main","picture","source","h1","h2","h3","h4","h5","h6"]);
+  "footer","nav","main","picture","source","h1","h2","h3","h4","h5","h6",
+  "img"]); // a standalone <img …> line is a block of its own (sanitize vets it)
 
 /* Attribute/URL safety. Text reaching inline() is already HTML-escaped by
    escapeHtml (& < >), so only quotes still need escaping here. */
@@ -57,6 +58,15 @@ function safeSrc(u){
 const INLINE_HTML=/&lt;(\/?)(sub|sup|kbd|mark|u|s|small|abbr|cite|q|samp|var|ins|del|b|i|em|strong|br)\s*(\/?)&gt;/gi;
 
 function inline(t){
+  /* Code spans are stashed before EVERYTHING else and restored untouched at
+     the very end: their text is already escaped exactly once by the caller, so
+     re-escaping it double-encoded entities (`&lt;` showed as &amp;lt;), and
+     any later pass leaking in would style it (`a_b_c` grew an <em>, `$x$`
+     became math). A backslash before the opening backtick means "literal
+     backtick", so that spelling is left for the escape pass below. */
+  const codes=[];
+  t = t.replace(/(?<!\\)`([^`]+)`/g,(m,c)=>"\x00C"+(codes.push(c)-1)+"\x00");
+
   /* Backslash escapes: "\X" for an ASCII-punctuation X becomes a literal X,
      tucked into a placeholder so no later rule reads it as syntax; restored
      last. < > & arrive pre-escaped as entities, so handle those spellings too.
@@ -90,8 +100,7 @@ function inline(t){
        .replace(/__(?!\s)(.+?)(?<![\s_])__/g,"<strong>$1</strong>")
        .replace(/(^|[^*])\*([^*]+)\*/g,"$1<em>$2</em>")
        .replace(/(^|[^_])_([^_]+)_/g,"$1<em>$2</em>")
-       .replace(/~~([^~]+)~~/g,"<del>$1</del>")
-       .replace(/`([^`]+)`/g,(m,c)=>`<code>${escapeHtml(c)}</code>`);
+       .replace(/~~([^~]+)~~/g,"<del>$1</del>");
   // angle autolinks <url> and <email> (arrive escaped as &lt;…&gt;)
   t = t.replace(/&lt;(https?:\/\/[^\s&]+?)&gt;/g,
         (m,u)=>`<a href="${safeHref(u)}" target="_blank" rel="noopener noreferrer">${u}</a>`)
@@ -108,10 +117,12 @@ function inline(t){
     (m,url)=>url
       ? `<a href="${safeHref(url)}" target="_blank" rel="noopener noreferrer">${url}</a>`
       : m);
-  // put the math back (a placeholder §3c fills in), then the escaped literals
+  // put the math back (a placeholder §3c fills in), then the escaped literals,
+  // then the untouched code spans
   t = t.replace(/\x00M(\d+)\x00/g,(m,i)=>
         `<span class="math-inline" data-tex="${attrValue(maths[i])}">${maths[i]}</span>`);
   t = t.replace(/\x00E(\d+)\x00/g,(m,i)=>lits[i]);
+  t = t.replace(/\x00C(\d+)\x00/g,(m,i)=>`<code>${codes[i]}</code>`);
   return t;
 }
 
@@ -323,6 +334,15 @@ function renderLines(lines){
     // heading
     const h=line.match(/^(#{1,6})\s+(.*)$/);
     if(h){ html+=`<h${h[1].length}>${inline(escapeHtml(h[2]))}</h${h[1].length}>`; i++; continue; }
+    // setext heading: a plain text line underlined with === (h1) or --- (h2).
+    // The exclusion list keeps every other block construct out of this branch.
+    if(i+1<lines.length && /\S/.test(line) &&
+       !/^(#{1,6}\s|>|\s*([-*+]|\d+\.)\s|```|\s*\$\$|\s*<|\s*\|)/.test(line) &&
+       /^ {0,3}(=+|-+)\s*$/.test(lines[i+1])){
+      const tag=lines[i+1].trim()[0]==="=" ? "h1" : "h2";
+      html+=`<${tag}>${inline(escapeHtml(line.trim()))}</${tag}>`;
+      i+=2; continue;
+    }
     // horizontal rule
     if(/^(\s*[-*_]){3,}\s*$/.test(line)){ html+="<hr>"; i++; continue; }
     // blockquote (collect consecutive lines)
@@ -332,8 +352,13 @@ function renderLines(lines){
       html+=`<blockquote>${render(q.join("\n"))}</blockquote>`;
       continue;
     }
-    // table
-    if(/^\s*\|.*\|\s*$/.test(line) && i+1<lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1])){
+    // Table. GFM doesn't require the outer pipes ("a | b" over "--|--" is a
+    // table too), so the header just needs a pipe and the next line must be a
+    // well-formed delimiter row — whose own inner pipe keeps a plain --- (an
+    // hr or setext underline) from ever matching.
+    if(/\|/.test(line) && i+1<lines.length &&
+       /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i+1]) &&
+       lines[i+1].includes("|")){
       const parseRow=r=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
       // the delimiter row carries per-column alignment: :--- ---: :---:
       const align=parseRow(lines[i+1]).map(d=>{
@@ -342,7 +367,7 @@ function renderLines(lines){
       });
       const cell=(tag,c,n)=>`<${tag}${align[n]||""}>${inline(escapeHtml(c))}</${tag}>`;
       const head=parseRow(line); i+=2; let body="";
-      while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){
+      while(i<lines.length && /\|/.test(lines[i]) && lines[i].trim()!==""){
         body+="<tr>"+parseRow(lines[i]).map((c,n)=>cell("td",c,n)).join("")+"</tr>"; i++;
       }
       html+=`<table><thead><tr>${head.map((c,n)=>cell("th",c,n)).join("")}</tr></thead>`+
@@ -356,13 +381,28 @@ function renderLines(lines){
       continue;
     }
     if(/^\s*$/.test(line)){ i++; continue; }
+    // Indented code block (4 spaces / tab, CommonMark). Reached only at a block
+    // boundary — a paragraph's own indented continuation lines never get here —
+    // and list items win first, so nested-list indentation is unaffected.
+    if(/^(?: {4}|\t)/.test(line)){
+      const buf=[];
+      while(i<lines.length &&
+            (/^(?: {4}|\t)/.test(lines[i]) ||
+             (lines[i].trim()==="" && i+1<lines.length && /^(?: {4}|\t)/.test(lines[i+1])))){
+        buf.push(lines[i].replace(/^(?: {4}|\t)/,"")); i++;
+      }
+      html+=`<pre><code>${escapeHtml(buf.join("\n"))}</code></pre>`;
+      continue;
+    }
     // paragraph (collect until blank line or a block start)
     const para=[];
     while(i<lines.length && !/^\s*$/.test(lines[i]) &&
           !/^(#{1,6}\s|>|\s*[-*+]\s|\s*\d+\.\s|```|\s*\$\$|(\s*[-*_]){3,}\s*$)/.test(lines[i])){
       para.push(lines[i]); i++;
     }
-    html+=`<p>${inline(escapeHtml(para.join("\n"))).replace(/\n/g,"<br>")}</p>`;
+    // a backslash at the end of a line is a hard break (the "\" itself vanishes;
+    // the newline it decorated becomes the <br> below like any other)
+    html+=`<p>${inline(escapeHtml(para.join("\n").replace(/\\\n/g,"\n"))).replace(/\n/g,"<br>")}</p>`;
   }
   return html;
 }
