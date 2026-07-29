@@ -1430,12 +1430,26 @@ document.getElementById("clearBtn").onclick=async()=>{
    8. Export menu — HTML / PDF / Markdown
    ============================================================ */
 const exportMenu=document.getElementById("exportMenu");
+const moreMenu=document.getElementById("moreMenu");
 document.getElementById("exportBtn").onclick=e=>{
   e.stopPropagation();
   copyMenu.classList.remove("open");   // only one menu open at a time
+  moreMenu.classList.remove("open");
   exportMenu.classList.toggle("open");
 };
 document.addEventListener("click",()=>exportMenu.classList.remove("open"));
+
+/* The ⋯ sheet holds the secondary buttons on narrow screens. They are the same
+   elements as on desktop — only their container changes — so their handlers,
+   ids and state (e.g. Sync Scroll's active class) need no special casing. */
+document.getElementById("moreBtn").onclick=e=>{
+  e.stopPropagation();
+  copyMenu.classList.remove("open");
+  exportMenu.classList.remove("open");
+  moreMenu.classList.toggle("open");
+};
+// a tap on one of its buttons bubbles up and closes the sheet
+document.addEventListener("click",()=>moreMenu.classList.remove("open"));
 exportMenu.querySelectorAll("[data-export]").forEach(btn=>{
   btn.onclick=()=>{
     exportMenu.classList.remove("open");
@@ -1528,6 +1542,7 @@ const copyMenu=document.getElementById("copyMenu");
 document.getElementById("copyBtn").onclick=e=>{
   e.stopPropagation();
   exportMenu.classList.remove("open"); // only one menu open at a time
+  moreMenu.classList.remove("open");
   copyMenu.classList.toggle("open");
 };
 document.addEventListener("click",()=>copyMenu.classList.remove("open"));
@@ -1552,7 +1567,9 @@ function setDir(dir){
   preview.dir=dir;
   // swap the placeholder so it reads naturally in each direction (avoids bidi mangling)
   editor.placeholder = dir==="rtl" ? "متن مارک‌داون را اینجا بنویسید…" : "# Write markdown here…";
-  dirBtn.textContent = dir==="rtl" ? "⇄ LTR" : "⇄ RTL";
+  // write into .lbl, never the button itself — textContent would drop the
+  // .ic glyph the narrow layout relies on
+  dirBtn.querySelector(".lbl").textContent = dir==="rtl" ? "LTR" : "RTL";
   localStorage.setItem(DIR_KEY,dir);
 }
 setDir(localStorage.getItem(DIR_KEY) || "ltr");
@@ -1663,16 +1680,18 @@ preview.addEventListener("scroll",()=>syncScroll(preview,editor),{passive:true})
    ============================================================ */
 const viewBtn=document.getElementById("viewBtn");
 const VIEWS=[
-  {cls:"",               label:"◫ Both"},
-  {cls:"mobile-edit",    label:"✎ Editor"},
-  {cls:"mobile-preview", label:"◉ Preview"},
+  {cls:"",               icon:"#i-both",    label:"Both"},
+  {cls:"mobile-edit",    icon:"#i-editor",  label:"Editor"},
+  {cls:"mobile-preview", icon:"#i-preview", label:"Preview"},
 ];
 let viewIdx=0;
 viewBtn.onclick=()=>{
   document.body.classList.remove("mobile-edit","mobile-preview");
   viewIdx=(viewIdx+1)%VIEWS.length;
   if(VIEWS[viewIdx].cls) document.body.classList.add(VIEWS[viewIdx].cls);
-  viewBtn.textContent=VIEWS[viewIdx].label;
+  // point the sprite reference at another symbol; textContent would delete the <svg>
+  viewBtn.querySelector(".ic use").setAttribute("href",VIEWS[viewIdx].icon);
+  viewBtn.querySelector(".lbl").textContent=VIEWS[viewIdx].label;
 };
 
 /* ============================================================
@@ -1720,8 +1739,35 @@ preview.addEventListener("contextmenu",e=>{
   positionFmtbar({top:e.clientY,bottom:e.clientY,left:e.clientX,width:0});
 });
 
-// keep the selection alive when clicking a toolbar button
+/* Touch devices never fire mouseup for a text selection — iOS shows its own
+   Copy/Paste menu instead — so the bar would never appear there. selectionchange
+   is the only event that reports a finger-dragged selection, and it fires on
+   every handle movement, hence the debounce. Kept touch-only so the desktop
+   paths above stay in charge (they already handle the right-click ordering). */
+if(window.matchMedia && window.matchMedia("(pointer: coarse)").matches){
+  let selTimer=null;
+  document.addEventListener("selectionchange",()=>{
+    clearTimeout(selTimer);
+    selTimer=setTimeout(showFmtbarForSelection,250);
+  });
+}
+
+// keep the selection alive when tapping/clicking a toolbar button — without
+// this the selection collapses before the command runs (touchstart matters on
+// iOS, where mousedown arrives too late to prevent the default)
 fmtbar.addEventListener("mousedown",e=>e.preventDefault());
+fmtbar.addEventListener("touchstart",e=>{
+  if(e.target.closest("button")) e.preventDefault();
+},{passive:false});
+// a prevented touchstart suppresses the synthetic click, so drive the buttons
+// directly from touchend on touch devices
+fmtbar.addEventListener("touchend",e=>{
+  const btn=e.target.closest("button[data-cmd]");
+  if(!btn) return;
+  e.preventDefault();
+  hMenu.classList.remove("open");   // a heading item lives inside the submenu
+  applyCmd(btn.dataset.cmd);
+},{passive:false});
 // hide when clicking outside, scrolling, or resizing
 document.addEventListener("mousedown",e=>{
   if(!fmtbar.hidden && !fmtbar.contains(e.target) && !preview.contains(e.target)) fmtbar.hidden=true;
@@ -1875,10 +1921,17 @@ fmtbar.querySelectorAll("button[data-cmd]").forEach(b=>{
 
 // Heading submenu (H1–H6), same open/close pattern as the header menus.
 const hMenu=document.getElementById("hMenu");
-document.getElementById("hBtn").onclick=e=>{
+const hBtn=document.getElementById("hBtn");
+hBtn.onclick=e=>{
   e.stopPropagation();
   hMenu.classList.toggle("open");
 };
+// touchend on the bar is prevented (see above), so open the submenu from it too
+hBtn.addEventListener("touchend",e=>{
+  e.preventDefault();
+  e.stopPropagation();
+  hMenu.classList.toggle("open");
+},{passive:false});
 // a click anywhere else (including a heading item — it bubbles) closes it
 document.addEventListener("click",()=>hMenu.classList.remove("open"));
 

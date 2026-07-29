@@ -57,6 +57,44 @@ header .brand {
 header .spacer { flex: 1; }
 #viewBtn { display: none; } /* only useful when panes stack (mobile) */
 
+/* The header's DOM order is the narrow-screen one (primary actions first,
+   secondary folded into #moreMenu). `order` restores the wide-screen
+   arrangement, and `display: contents` dissolves the ⋯ wrapper so its buttons
+   sit directly in the header row — same layout as before this menu existed. */
+header .brand   { order: 0; }
+#exportMenu     { order: 3; }
+#copyMenu       { order: 4; }
+header .spacer  { order: 5; }
+#readBtn        { order: 7; }
+#viewBtn        { order: 8; }
+#themeBtn       { order: 10; }
+#ghLink         { order: 11; }
+#moreMenu, #moreMenu > .menu-list { display: contents; }
+#moreBtn { display: none; }
+#clearBtn { order: 1; }
+#openBtn  { order: 2; }
+#syncBtn  { order: 6; }
+#dirBtn   { order: 9; }
+/* Most icons are a narrow-screen affordance, so they stay hidden here; the
+   four that were always part of the wide-screen label keep showing. */
+header .ic { display: none; margin-inline-end: 5px; }
+header .brand .ic,
+#viewBtn .ic, #dirBtn .ic, #themeBtn .ic { display: inline-flex; }
+header .ic {
+  align-items: center;
+  vertical-align: -0.18em;   /* sit on the text baseline, not above it */
+}
+header .ic svg {
+  width: 1.05em;
+  height: 1.05em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+header .brand .ic svg { width: 1.15em; height: 1.15em; }
+
 /* Buttons */
 button {
   font: inherit;
@@ -497,13 +535,58 @@ footer a { color: var(--accent); text-decoration: underline; }
 
 /* ---------- Mobile: stacked panes ---------- */
 @media (max-width: 720px) {
-  /* Header: a flex:1 spacer inside a wrapping row eats the rest of its line and
-     scatters the buttons — drop it and let them flow in tidy rows instead. */
-  header { gap: 6px; padding: 6px 8px; }
+  /* One row of glyphs. The header used to wrap onto three rows and eat ~100px
+     of a screen that has little to spare, so captions are dropped and the
+     secondary actions move into the ⋯ sheet. */
+  header { gap: 4px; padding: 6px 8px; flex-wrap: nowrap; }
   header .spacer { display: none; }
-  header .brand { flex-basis: 100%; margin: 0 0 2px; }
-  header button { padding: 5px 9px; font-size: 12px; }
-  #ghLink { margin-inline-start: auto; } /* park the GitHub icon at the end */
+  header .brand { margin-inline-end: 2px; }
+  header .brand .lbl { display: none; }   /* just the pencil, as a mark */
+  header button { padding: 6px 9px; font-size: 13px; }
+  header .lbl { display: none; }
+  header .ic { display: inline-flex; margin: 0; vertical-align: middle; }
+  header .ic svg { width: 17px; height: 17px; }
+  /* Restate the order with the same id-level specificity as the wide-screen
+     rules above, otherwise those win here and the row comes out scrambled.
+     Reading order: mark, then the actions, then ⋯ pinned to the far end. */
+  header .brand { order: 0; }
+  #viewBtn      { order: 1; }
+  #readBtn      { order: 2; }
+  #exportMenu   { order: 3; }
+  #copyMenu     { order: 4; }
+  #themeBtn     { order: 5; }
+  #moreMenu     { order: 6; margin-inline-start: auto; }
+
+  /* the ⋯ sheet: a real dropdown again, laid out as a grid of labelled cells */
+  #moreMenu { display: inline-block; position: relative; }
+  #moreBtn { display: inline-block; }
+  #moreMenu > .menu-list {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    inset-inline-end: 0;
+    inset-inline-start: auto;
+    grid-template-columns: repeat(4, minmax(64px, 1fr));
+    gap: 6px;
+    padding: 8px;
+    min-width: 0;
+    overflow: visible;
+  }
+  #moreMenu.open > .menu-list { display: grid; }
+  #moreMenu .menu-list button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 4px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+  }
+  #moreMenu .menu-list .lbl { display: block; }   /* the sheet is labelled */
+  #moreMenu .menu-list .ic svg { width: 19px; height: 19px; }
+  /* the GitHub mark is nice-to-have; keep it out of the one-row budget */
+  #ghLink { display: none; }
 
   /* touch scrollbars are overlay, so the desktop scrollbar clearance just
      strands the ✕ in the middle of the text — tuck it back to the corner */

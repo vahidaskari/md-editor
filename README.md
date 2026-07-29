@@ -6,7 +6,7 @@
 
 No build step. No server. No account. Just open it and write.
 
-[**→ Try it live**](https://vahidaskari.github.io/md-editor/)
+[**→ Try it live**](https://markdowneditor.ir/)
 
 </div>
 
