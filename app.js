@@ -1653,7 +1653,7 @@ divider.addEventListener("dblclick",()=>setSplit(50));
    13. Synced scrolling
    ============================================================ */
 const syncBtn=document.getElementById("syncBtn");
-let syncOn=localStorage.getItem(SYNC_KEY)!=="off"; // default on
+let syncOn=localStorage.getItem(SYNC_KEY)==="on"; // default off
 function updateSyncBtn(){ syncBtn.classList.toggle("active",syncOn); }
 updateSyncBtn();
 syncBtn.onclick=()=>{

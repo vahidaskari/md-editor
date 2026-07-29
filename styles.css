@@ -75,6 +75,25 @@ header .spacer  { order: 5; }
 #openBtn  { order: 2; }
 #syncBtn  { order: 6; }
 #dirBtn   { order: 9; }
+/* Dissolved out of the dropdown, these are plain header buttons again — the
+   `.menu-list button` reset above would otherwise leave them borderless. */
+#moreMenu > .menu-list > button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  text-align: center;
+  padding: 5px 10px;
+}
+#moreMenu > .menu-list > button:hover {
+  background: var(--bg-panel);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#moreMenu > .menu-list > button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
 /* Most icons are a narrow-screen affordance, so they stay hidden here; the
    four that were always part of the wide-screen label keep showing. */
 header .ic { display: none; margin-inline-end: 5px; }
