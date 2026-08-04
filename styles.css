@@ -230,6 +230,10 @@ textarea {
   border-radius: 6px;
   padding: 14px;
   overflow-x: auto;
+  /* Code is left-to-right no matter which way the prose runs. */
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
 }
 /* highlight.js colours the tokens, but the block keeps OUR themed background:
    its `.hljs` background rule loses to this more specific selector on purpose. */
