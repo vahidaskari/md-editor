@@ -1,5 +1,5 @@
 /* ============================================================
-   MD Editor — application logic
+   Markdown Editor — application logic
    Sections:
      1. Markdown renderer (markdown → HTML)
      2. UI helpers (toast + confirm modal)
@@ -568,7 +568,7 @@ const SYNC_KEY  = "md-editor-sync";
    is shown working rather than described, so the page teaches markdown while it
    shows what this editor can do. Keep it honest and readable — a wall of
    keywords would only make the tool look cheap. */
-const SAMPLE=`# Welcome to MD Editor
+const SAMPLE=`# Welcome to Markdown Editor
 
 A fast markdown editor that runs entirely in your browser. No build step, no server, no account — and nothing you write ever leaves this device.
 
@@ -1662,15 +1662,23 @@ syncBtn.onclick=()=>{
   updateSyncBtn();
   toast(syncOn?"Scroll sync on":"Scroll sync off");
 };
-let scrollLock=null;
+/* Writing dst.scrollTop makes dst fire its own `scroll`, which would sync back
+   and nudge src — a ping-pong that never settles because the two panes have
+   different heights, so the round trip never lands on the same pixel. The lock
+   pins one pane as the source for as long as scrolling continues; a frame is
+   not enough, since momentum scrolling on touch keeps firing events long after
+   the finger is gone and the echo arrives after the frame has passed. */
+let scrollLock=null, scrollLockTimer=null;
 function syncScroll(src,dst){
   if(!syncOn) return;
-  if(scrollLock&&scrollLock!==src) return;
+  if(scrollLock&&scrollLock!==src) return;   // dst echoing our own write
   scrollLock=src;
+  clearTimeout(scrollLockTimer);
+  scrollLockTimer=setTimeout(()=>{ scrollLock=null; },150);
   const sMax=src.scrollHeight-src.clientHeight;
   const dMax=dst.scrollHeight-dst.clientHeight;
-  dst.scrollTop = sMax>0 ? (src.scrollTop/sMax)*dMax : 0;
-  requestAnimationFrame(()=>{ scrollLock=null; });
+  const target = sMax>0 ? (src.scrollTop/sMax)*dMax : 0;
+  if(Math.abs(dst.scrollTop-target)>1) dst.scrollTop=target;  // ignore sub-pixel drift
 }
 editor.addEventListener("scroll",()=>syncScroll(editor,preview),{passive:true});
 preview.addEventListener("scroll",()=>syncScroll(preview,editor),{passive:true});

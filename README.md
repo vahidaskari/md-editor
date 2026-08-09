@@ -1,6 +1,6 @@
 <div align="center">
 
-# ✎ MD Editor
+# ✎ Markdown Editor
 
 **A fast, no-nonsense markdown editor that runs entirely in your browser.**
 
@@ -11,7 +11,7 @@ No build step. No server. No account. Just open it and write.
 </div>
 
 <!-- Tip: drop a screenshot at docs/screenshot.png and uncomment the line below.
-![MD Editor](docs/screenshot.png)
+![Markdown Editor](docs/screenshot.png)
 -->
 
 ---

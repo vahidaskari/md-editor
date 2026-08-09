@@ -1,5 +1,5 @@
 /* ============================================================
-   MD Editor — styles
+   Markdown Editor — styles
    ============================================================ */
 
 /* ---------- Theme tokens ---------- */
@@ -624,4 +624,9 @@ footer a { color: var(--accent); text-decoration: underline; }
   body.mobile-preview .edit-pane { display: none; }
   /* single-pane modes have nothing to resize between */
   body.mobile-edit .divider, body.mobile-preview .divider { display: none; }
+  /* …and nothing to share the space with. The split is stored as an inline
+     flex-basis on .edit-pane, so only !important can free the pane to fill
+     the screen instead of keeping its old share of it. */
+  body.mobile-edit .edit-pane,
+  body.mobile-preview .preview-pane { flex: 1 1 auto !important; }
 }
