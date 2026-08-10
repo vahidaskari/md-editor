@@ -1013,6 +1013,13 @@ function flushSave(){
 window.addEventListener("pagehide",flushSave);
 document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
 
+/* Set by §17 once it has initialised. Every path that changes the document
+   funnels through update() — typing, importing, clearing, and the sync back
+   from the editable preview, which assigns editor.value without firing
+   `input` — so this is the one place a listener would miss nothing. It stays
+   null until then because update() already runs during start-up. */
+let afterUpdate=null;
+
 function update(){
   const v=editor.value;
   preview.innerHTML=sanitize(render(v));
@@ -1025,6 +1032,7 @@ function update(){
   scheduleHighlight();
   persist(v);
   updateStats(v);
+  if(afterUpdate) afterUpdate();
 }
 
 editor.value = localStorage.getItem(KEY) ?? SAMPLE;
@@ -1565,6 +1573,9 @@ const dirBtn=document.getElementById("dirBtn");
 function setDir(dir){
   editor.dir=dir;
   preview.dir=dir;
+  // looked up rather than closed over: this runs at start-up, before §17 has
+  // initialised, and a const from there would still be in its dead zone
+  document.getElementById("hlLayer").dir=dir;
   // swap the placeholder so it reads naturally in each direction (avoids bidi mangling)
   editor.placeholder = dir==="rtl" ? "متن مارک‌داون را اینجا بنویسید…" : "# Write markdown here…";
   // write into .lbl, never the button itself — textContent would drop the
@@ -1600,6 +1611,7 @@ function setReading(on){
   fmtbar.hidden=true;
   hMenu.classList.remove("open");
   findbar.hidden=true;
+  paintHighlights();   // drop any marks left behind by an open find bar
 }
 document.getElementById("readBtn").onclick=()=>setReading(true);
 document.getElementById("readExit").onclick=()=>setReading(false);
@@ -1991,9 +2003,67 @@ function findMatches(){
   while(i!==-1){ out.push(i); i=hay.indexOf(needle,i+needle.length); }
   return out;
 }
+/* ---- highlight layer ----
+   A textarea can't style parts of its own value, and once focus moves to the
+   find field the browser stops painting its selection, so matches would be
+   invisible. #hlLayer is a transparent copy of the text sitting behind the
+   textarea with <mark> around each hit; the stylesheet gives the two identical
+   metrics, and the only thing this code has to keep in step is the scroll
+   offset. It is populated solely while the bar is open — on a long document
+   rebuilding it per keystroke would be wasted work the rest of the time. */
+const hlLayer=document.getElementById("hlLayer");
+let curMatch=-1;
+
+function paintHighlights(){
+  if(findbar.hidden || !findInput.value){
+    if(hlLayer.firstChild) hlLayer.textContent="";
+    return;
+  }
+  const text=editor.value, len=findInput.value.length;
+  const frag=document.createDocumentFragment();
+  let at=0;
+  for(const pos of findMatches()){
+    if(pos>at) frag.appendChild(document.createTextNode(text.slice(at,pos)));
+    const mk=document.createElement("mark");
+    if(pos===curMatch) mk.className="cur";
+    mk.textContent=text.slice(pos,pos+len);
+    frag.appendChild(mk);
+    at=pos+len;
+  }
+  // the trailing "\n" keeps a final empty line from collapsing, so a match on
+  // the last line stays put when the document ends with a newline
+  frag.appendChild(document.createTextNode(text.slice(at)+"\n"));
+  hlLayer.textContent="";
+  hlLayer.appendChild(frag);
+  syncHighlightGutter();
+  syncHighlightScroll();
+}
+function syncHighlightScroll(){
+  hlLayer.scrollTop=editor.scrollTop;
+  hlLayer.scrollLeft=editor.scrollLeft;
+}
+editor.addEventListener("scroll",syncHighlightScroll,{passive:true});
+
+/* A classic (non-overlay) scrollbar takes its width out of the textarea's
+   content box, so the same text wraps a few characters earlier there than in
+   the layer — and every highlight after the first wrapped line slides off its
+   word. Mirror that lost width as padding. It comes out 0 where scrollbars are
+   overlays, and follows the bar appearing and disappearing as the document
+   grows. `inline-end` rather than `right` because an RTL textarea puts its
+   scrollbar on the other side, and the logical keyword tracks it. */
+function syncHighlightGutter(){
+  const pad=parseFloat(getComputedStyle(editor).paddingInlineEnd)||0;
+  hlLayer.style.paddingInlineEnd=(pad+editor.offsetWidth-editor.clientWidth)+"px";
+}
+/* Resizing the window or dragging the pane divider can make that scrollbar
+   come and go, and changes the wrap width either way. */
+if(window.ResizeObserver)
+  new ResizeObserver(()=>{ if(!findbar.hidden) paintHighlights(); }).observe(editor);
+
 function refreshFindCount(){
   const m=findMatches();
   findCount.textContent = findInput.value ? (m.length+" found") : "";
+  paintHighlights();
 }
 function scrollEditorTo(pos){
   const line=editor.value.slice(0,pos).split("\n").length-1;
@@ -2014,9 +2084,15 @@ function gotoMatch(dir){
     const before=matches.filter(i=>i<editor.selectionStart);
     pos=before.length ? before[before.length-1] : matches[matches.length-1]; // wrap to end
   }
-  editor.focus();
+  /* Focusing the editor here would pull focus out of the find field, so the
+     next Enter — meant to step to the following match — would land in the
+     document as a newline instead. setSelectionRange works on an unfocused
+     textarea, and the highlight layer is what makes the match visible. */
+  if(!findbar.contains(document.activeElement)) editor.focus();
   editor.setSelectionRange(pos,pos+len);
   scrollEditorTo(pos);
+  curMatch=pos;
+  paintHighlights();
 }
 function replaceCurrent(){
   const term=findInput.value; if(!term) return;
@@ -2045,9 +2121,19 @@ function openFind(){
   const s=editor.value.substring(editor.selectionStart,editor.selectionEnd);
   if(s && !s.includes("\n")) findInput.value=s;
   findInput.focus(); findInput.select();
+  curMatch=-1;
   refreshFindCount();
 }
-function closeFind(){ findbar.hidden=true; editor.focus(); }
+function closeFind(){
+  findbar.hidden=true;
+  curMatch=-1;
+  paintHighlights();   // hidden bar → the layer empties itself
+  editor.focus();
+}
+/* Any edit moves the matches after it, so the layer has to be redrawn.
+   paintHighlights is a no-op while the bar is closed, which is most of the
+   time, so this costs nothing on the common path. */
+afterUpdate=paintHighlights;
 
 document.addEventListener("keydown",e=>{
   // e.code is the physical key, so this still fires on non-Latin layouts

@@ -190,20 +190,53 @@ button.active:hover { color: var(--on-accent); filter: brightness(1.08); }
 }
 .divider:hover, .divider.dragging { background: var(--accent); }
 
-textarea {
+/* The textarea and its highlight layer are stacked in here. Every metric that
+   affects where a character lands is declared once, on the shared selector
+   below, so the two can never drift apart. */
+.editor-wrap {
   flex: 1;
-  width: 100%;
-  resize: none;
+  min-height: 0;
+  position: relative;
+  background: var(--bg);
+}
+.editor-wrap textarea,
+.hl-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
   border: none;
-  outline: none;
   padding: 20px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 14px;
   line-height: 1.6;
-  background: var(--bg);
-  color: var(--text);
+  letter-spacing: normal;
   tab-size: 2;
+  /* a textarea soft-wraps between words and keeps its own line breaks; this is
+     the CSS that reproduces it exactly */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
+textarea {
+  resize: none;
+  outline: none;
+  background: transparent;   /* the layer behind shows through */
+  color: var(--text);
+  overflow: auto;
+}
+.hl-layer {
+  overflow: hidden;          /* scrolled programmatically, in step with the textarea */
+  pointer-events: none;
+  color: transparent;        /* only the marks are meant to be seen */
+  z-index: 0;
+}
+.editor-wrap textarea { z-index: 1; }
+.hl-layer mark {
+  background: #ffd33d55;
+  color: transparent;
+  border-radius: 2px;
+}
+.hl-layer mark.cur { background: var(--accent); opacity: .45; }
 
 /* ---------- Rendered preview ---------- */
 .preview {

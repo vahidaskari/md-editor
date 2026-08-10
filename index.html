@@ -155,8 +155,16 @@
 
 <main class="main">
   <div class="pane edit-pane">
-    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off"
-              autocapitalize="off" placeholder="# Write markdown here…"></textarea>
+    <!-- The highlight layer is a mirror of the textarea sitting directly behind
+         it: same text, same metrics, but transparent except for the <mark>s
+         around search hits. A textarea cannot style ranges of its own value,
+         and its native selection is not painted once focus moves to the find
+         field. Only populated while the find bar is open (see app.js §17). -->
+    <div class="editor-wrap">
+      <div id="hlLayer" class="hl-layer" aria-hidden="true"></div>
+      <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off"
+                autocapitalize="off" placeholder="# Write markdown here…"></textarea>
+    </div>
   </div>
   <div class="divider" id="divider" title="Drag to resize"></div>
   <div class="pane preview-pane">
