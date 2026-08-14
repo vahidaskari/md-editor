@@ -51,7 +51,7 @@ Your document is saved in your own browser and never sent anywhere. There is no 
 - **Explorer** — keep multiple documents open, switch between them, create or rename documents and keep the workspace across reloads
 - **Reading mode** — distraction-free and editable by default; use the lock button for a fully read-only view
 - **Dark & light themes**, remembered between visits
-- **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew
+- **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew, remembered independently for each document
 - **Sync scroll** between the two panes (toggleable)
 - **Autosave** — every open document and the active workspace are kept in this browser as you write
 
