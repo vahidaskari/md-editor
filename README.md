@@ -44,15 +44,16 @@ Your document is saved in your own browser and never sent anywhere. There is no 
 
 - **Export** — Markdown, PDF (through the browser's own print engine, so the text stays selectable) or a self-contained HTML file
 - **Copy** — as Markdown, HTML or plain text
-- **Import** — open a `.md` file or drag one onto the window
+- **Import** — open one or multiple `.md` files, or drag them onto the window
 
 **Comfort**
 
-- **Reading mode** — hides every control and locks editing; just your document
+- **Explorer** — keep multiple documents open, switch between them, create or rename documents and keep the workspace across reloads
+- **Reading mode** — distraction-free and editable by default; use the lock button for a fully read-only view
 - **Dark & light themes**, remembered between visits
 - **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew
 - **Sync scroll** between the two panes (toggleable)
-- **Autosave** — your document is kept in this browser as you write
+- **Autosave** — every open document and the active workspace are kept in this browser as you write
 
 ## Markdown it understands
 

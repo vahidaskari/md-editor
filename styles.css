@@ -166,6 +166,135 @@ button.active:hover { color: var(--on-accent); filter: brightness(1.08); }
 }
 #ghLink:hover { color: var(--text); background: var(--bg-panel); }
 
+
+/* ---------- Explorer / multi-document workspace ---------- */
+.workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.explorer-shell {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  z-index: 150;
+  background: var(--bg-panel);
+  border-inline-end: 1px solid var(--border);
+}
+.explorer-rail {
+  flex: 0 0 38px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8px;
+  border-inline-end: 1px solid var(--border);
+}
+.explorer-toggle,
+.explorer-new,
+.explorer-file-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+}
+.explorer-toggle {
+  width: 30px;
+  height: 30px;
+  padding: 6px;
+  border-radius: 6px;
+}
+.explorer-toggle:hover,
+.explorer-new:hover,
+.explorer-file-close:hover { color: var(--text); background: var(--bg); }
+.explorer-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.explorer-panel {
+  width: 220px;
+  min-width: 180px;
+  max-width: 320px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+}
+.explorer-shell.collapsed .explorer-panel { display: none; }
+.explorer-head {
+  height: 38px;
+  flex: 0 0 38px;
+  padding: 0 8px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  border-bottom: 1px solid var(--border);
+}
+.explorer-head span { flex: 1; }
+.explorer-new {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 5px;
+  font-size: 20px;
+  line-height: 24px;
+}
+.explorer-files {
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+.explorer-file {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px 5px 9px;
+  color: var(--muted);
+  border-radius: 5px;
+  font-size: 13px;
+}
+.explorer-file:hover { background: var(--bg); color: var(--text); }
+.explorer-file.active { background: var(--bg); color: var(--text); }
+.explorer-file-main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-file-main::before {
+  content: "#";
+  margin-inline-end: 7px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.explorer-file-close {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  visibility: hidden;
+}
+.explorer-file:hover .explorer-file-close,
+.explorer-file.active .explorer-file-close { visibility: visible; }
+
 /* ---------- Editor / preview panes ---------- */
 .main {
   flex: 1;
@@ -334,6 +463,7 @@ textarea {
 /* ---------- Reading mode ---------- */
 body.reading header,
 body.reading footer,
+body.reading .explorer-shell,
 body.reading .edit-pane,
 body.reading .divider { display: none; }
 body.reading .preview {
@@ -341,20 +471,37 @@ body.reading .preview {
   padding-inline: max(28px, calc((100% - 840px) / 2));
   padding-block: 40px 72px;
 }
-body.reading .preview input[type="checkbox"] { pointer-events: none; }
-.read-exit {
+body.reading.reading-locked .preview input[type="checkbox"] { pointer-events: none; }
+.read-controls {
   display: none;
   position: fixed;
   top: 16px;
   inset-inline-end: 36px; /* clear of the preview's scrollbar (~15px) */
   z-index: 200;
+  gap: 8px;
+}
+.read-controls button {
   width: 34px;
   height: 34px;
   padding: 0;
   border-radius: 50%;
   box-shadow: 0 4px 16px rgba(0,0,0,.25);
 }
-body.reading .read-exit { display: block; }
+.read-lock svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.read-lock[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+body.reading .read-controls { display: flex; }
 
 /* ---------- Footer ---------- */
 footer {
@@ -567,9 +714,9 @@ footer a { color: var(--accent); text-decoration: underline; }
    run closer to the paper edge than a real margin would. */
 @page { margin: 0; }
 @media print {
-  header, footer, #toasts, #fmtbar, #findbar, #linkStatus, #readExit,
-  .edit-pane, .divider { display: none !important; }
-  body, .main, .preview-pane, .preview {
+  header, footer, #toasts, #fmtbar, #findbar, #linkStatus, #readControls,
+  .explorer-shell, .edit-pane, .divider { display: none !important; }
+  body, .workspace, .main, .preview-pane, .preview {
     display: block !important;
     height: auto !important;
     overflow: visible !important;
@@ -646,9 +793,20 @@ footer a { color: var(--accent); text-decoration: underline; }
 
   /* touch scrollbars are overlay, so the desktop scrollbar clearance just
      strands the ✕ in the middle of the text — tuck it back to the corner */
-  .read-exit { top: 10px; inset-inline-end: 10px; }
+  .read-controls { top: 10px; inset-inline-end: 10px; }
 
   .main { flex-direction: column; }
+  .explorer-shell { flex: 0 0 38px; }
+  .explorer-panel {
+    position: absolute;
+    z-index: 159;
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 38px;
+    width: min(280px, calc(100vw - 38px));
+    max-width: none;
+    box-shadow: 8px 0 24px rgba(0,0,0,.25);
+  }
   .divider { cursor: row-resize; }
   .divider::before { inset: -4px 0; }
   #viewBtn { display: inline-block; }
