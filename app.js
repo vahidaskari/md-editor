@@ -701,10 +701,12 @@ function docId(){
          "doc-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,9);
 }
 function normalDoc(raw,fallbackName){
+  const fallbackDir=localStorage.getItem(DIR_KEY)==="rtl" ? "rtl" : "ltr";
   return {
     id:typeof raw?.id==="string" && raw.id ? raw.id : docId(),
     name:typeof raw?.name==="string" && raw.name ? raw.name : fallbackName,
     content:typeof raw?.content==="string" ? raw.content : "",
+    dir:raw?.dir==="rtl" || raw?.dir==="ltr" ? raw.dir : fallbackDir,
   };
 }
 function loadWorkspace(){
@@ -765,7 +767,9 @@ function activateDocument(id){
   if(id===activeDocumentId || !documents.some(d=>d.id===id)) return;
   flushSave();
   activeDocumentId=id;
-  editor.value=getActiveDocument().content;
+  const doc=getActiveDocument();
+  editor.value=doc.content;
+  setDir(doc.dir,false);
   localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
   renderExplorer();
   update();
@@ -773,10 +777,16 @@ function activateDocument(id){
 }
 function createDocument(name,content){
   flushSave();
-  const doc={id:docId(),name:uniqueDocName(name||"Untitled.md"),content:content||""};
+  const doc={
+    id:docId(),
+    name:uniqueDocName(name||"Untitled.md"),
+    content:content||"",
+    dir:editor.dir==="rtl" ? "rtl" : "ltr",
+  };
   documents.push(doc);
   activeDocumentId=doc.id;
   editor.value=doc.content;
+  setDir(doc.dir,false);
   renderExplorer();
   persist(doc.content);
   update();
@@ -811,10 +821,19 @@ async function closeDocument(id){
   flushSave();
   const idx=documents.findIndex(d=>d.id===id);
   documents.splice(idx,1);
-  if(!documents.length) documents.push({id:docId(),name:"Untitled.md",content:""});
+  if(!documents.length){
+    documents.push({
+      id:docId(),
+      name:"Untitled.md",
+      content:"",
+      dir:editor.dir==="rtl" ? "rtl" : "ltr",
+    });
+  }
   if(activeDocumentId===id){
     activeDocumentId=documents[Math.min(idx,documents.length-1)].id;
-    editor.value=getActiveDocument().content;
+    const nextDoc=getActiveDocument();
+    editor.value=nextDoc.content;
+    setDir(nextDoc.dir,false);
     update();
   }
   localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
@@ -1592,13 +1611,19 @@ async function loadFiles(files){
   for(const file of accepted){
     try{
       const content=await readFile(file);
-      const doc={id:docId(),name:uniqueDocName(file.name||"document.md"),content};
+      const doc={
+        id:docId(),
+        name:uniqueDocName(file.name||"document.md"),
+        content,
+        dir:editor.dir==="rtl" ? "rtl" : "ltr",
+      };
       documents.push(doc); last=doc; imported++;
     }catch{ toast("Couldn't read "+file.name,true); }
   }
   if(!last) return;
   activeDocumentId=last.id;
   editor.value=last.content;
+  setDir(last.dir,false);
   renderExplorer();
   update();
   toast(imported===1 ? "Imported "+last.name : "Imported "+imported+" files");
@@ -1759,22 +1784,38 @@ copyMenu.querySelectorAll("[data-copy]").forEach(btn=>{
    10. Text direction (LTR / RTL)
    ============================================================ */
 const dirBtn=document.getElementById("dirBtn");
-function setDir(dir){
+function setDir(dir,save=true){
+  dir=dir==="rtl" ? "rtl" : "ltr";
   editor.dir=dir;
   preview.dir=dir;
-  // looked up rather than closed over: this runs at start-up, before §17 has
-  // initialised, and a const from there would still be in its dead zone
+  // Keep the find/highlight mirror in the same direction as the editor.
   document.getElementById("hlLayer").dir=dir;
-  // swap the placeholder so it reads naturally in each direction (avoids bidi mangling)
-  editor.placeholder = dir==="rtl" ? "متن مارک‌داون را اینجا بنویسید…" : "# Write markdown here…";
-  // write into .lbl, never the button itself — textContent would drop the
-  // .ic glyph the narrow layout relies on
-  dirBtn.querySelector(".lbl").textContent = dir==="rtl" ? "LTR" : "RTL";
-  localStorage.setItem(DIR_KEY,dir);
+  // Swap the placeholder so it reads naturally in each direction.
+  editor.placeholder=dir==="rtl"
+    ? "متن مارک‌داون را اینجا بنویسید…"
+    : "# Write markdown here…";
+  // The label describes the direction the button will switch TO.
+  dirBtn.querySelector(".lbl").textContent=
+    dir==="rtl" ? "LTR" : "RTL";
+  if(save){
+    const doc=getActiveDocument();
+    if(doc){
+      doc.dir=dir;
+      try{
+        localStorage.setItem(FILES_KEY,JSON.stringify(documents));
+      }catch{
+        toast("Browser storage is full — download important files",true);
+      }
+    }
+    // Keep the old key as a migration/default value for older workspaces
+    // and newly created/imported documents.
+    localStorage.setItem(DIR_KEY,dir);
+  }
 }
-setDir(localStorage.getItem(DIR_KEY) || "ltr");
-dirBtn.onclick=()=>setDir(editor.dir==="rtl"?"ltr":"rtl");
-
+setDir(getActiveDocument().dir,false);
+dirBtn.onclick=()=>{
+  setDir(editor.dir==="rtl" ? "ltr" : "rtl");
+};
 /* ============================================================
    11. Theme toggle
    ============================================================ */
