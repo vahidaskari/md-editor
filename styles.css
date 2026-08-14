@@ -298,6 +298,7 @@ button.active:hover { color: var(--on-accent); filter: brightness(1.08); }
 /* ---------- Editor / preview panes ---------- */
 .main {
   flex: 1;
+  min-width: 0;
   display: flex;
   min-height: 0;
 }
