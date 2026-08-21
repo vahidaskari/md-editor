@@ -11,6 +11,7 @@
      5. Editable preview (HTML → markdown via Turndown)
      6. Editor keyboard shortcuts
      7. Save / Open files
+    7b. Explorer / multi-document workspace
      8. Export menu (HTML / PDF / Markdown)
      9. Copy menu
     10. Text direction (LTR / RTL)
@@ -554,11 +555,17 @@ const main      = document.querySelector(".main");
 const divider   = document.getElementById("divider");
 const editPane  = document.querySelector(".edit-pane");
 const header    = document.querySelector("header");
+const explorerShell=document.getElementById("explorerShell");
+const explorerToggle=document.getElementById("explorerToggle");
+const explorerFiles=document.getElementById("explorerFiles");
+const newDocBtn=document.getElementById("newDocBtn");
 const toastHost = document.getElementById("toasts");
 const statWords = document.getElementById("stat-words");
 const statChars = document.getElementById("stat-chars");
-
-const KEY       = "md-editor-content";
+const KEY       = "md-editor-content";       // legacy single-document fallback
+const FILES_KEY = "md-editor-files";
+const ACTIVE_FILE_KEY="md-editor-active-file";
+const EXPLORER_KEY="md-editor-explorer";
 const THEME_KEY = "md-editor-theme";
 const DIR_KEY   = "md-editor-dir";
 const SPLIT_KEY = "md-editor-split";
@@ -685,6 +692,168 @@ Hidden until you open it, and markdown still works inside.
 
 Your work saves to this browser as you type, and you can drag a \`.md\` file onto the window to open it.
 `;
+
+/* Multi-document workspace. `editor.value` remains the active document's source
+   of truth, so the renderer, Turndown bridge, export, find/replace and every
+   existing editor feature stay single-document internally. */
+function docId(){
+  return (crypto.randomUUID && crypto.randomUUID()) ||
+         "doc-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,9);
+}
+function normalDoc(raw,fallbackName){
+  const fallbackDir=localStorage.getItem(DIR_KEY)==="rtl" ? "rtl" : "ltr";
+  return {
+    id:typeof raw?.id==="string" && raw.id ? raw.id : docId(),
+    name:typeof raw?.name==="string" && raw.name ? raw.name : fallbackName,
+    content:typeof raw?.content==="string" ? raw.content : "",
+    dir:raw?.dir==="rtl" || raw?.dir==="ltr" ? raw.dir : fallbackDir,
+  };
+}
+function loadWorkspace(){
+  try{
+    const raw=JSON.parse(localStorage.getItem(FILES_KEY)||"null");
+    if(Array.isArray(raw) && raw.length){
+      return raw.slice(0,100).map((d,i)=>normalDoc(d,"Document-"+(i+1)+".md"));
+    }
+  }catch{}
+  // Migration path: preserve the single document used by every earlier release.
+  return [normalDoc({name:"document.md",content:localStorage.getItem(KEY) ?? SAMPLE},"document.md")];
+}
+let documents=loadWorkspace();
+let activeDocumentId=localStorage.getItem(ACTIVE_FILE_KEY);
+if(!documents.some(d=>d.id===activeDocumentId)) activeDocumentId=documents[0].id;
+function getActiveDocument(){ return documents.find(d=>d.id===activeDocumentId) || documents[0]; }
+function uniqueDocName(base,excludeId=null){
+  const dot=base.lastIndexOf("."), stem=dot>0?base.slice(0,dot):base, ext=dot>0?base.slice(dot):"";
+  const used=new Set(documents.filter(d=>d.id!==excludeId).map(d=>d.name.toLowerCase()));
+  if(!used.has(base.toLowerCase())) return base;
+  let n=2,name;
+  do{ name=stem+"-"+n+++ext; }while(used.has(name.toLowerCase()));
+  return name;
+}
+function renderExplorer(){
+  explorerFiles.replaceChildren();
+  for(const doc of documents){
+    const row=document.createElement("div");
+    row.className="explorer-file"+(doc.id===activeDocumentId?" active":"");
+    row.dataset.id=doc.id;
+    const open=document.createElement("button");
+    open.className="explorer-file-main";
+    open.type="button";
+    open.title=doc.name;
+    open.textContent=doc.name;
+    const rename=document.createElement("button");
+    rename.className="explorer-file-close explorer-file-rename";
+    rename.type="button";
+    rename.title="Rename "+doc.name;
+    rename.setAttribute("aria-label","Rename "+doc.name);
+    rename.textContent="✎";
+    const close=document.createElement("button");
+    close.className="explorer-file-close";
+    close.type="button";
+    close.title="Close "+doc.name;
+    close.setAttribute("aria-label","Close "+doc.name);
+    close.textContent="×";
+    row.append(open,rename,close);
+    explorerFiles.appendChild(row);
+  }
+}
+function setExplorerOpen(open){
+  explorerShell.classList.toggle("collapsed",!open);
+  explorerToggle.setAttribute("aria-expanded",String(open));
+  localStorage.setItem(EXPLORER_KEY,open?"open":"closed");
+}
+function activateDocument(id){
+  if(id===activeDocumentId || !documents.some(d=>d.id===id)) return;
+  flushSave();
+  activeDocumentId=id;
+  const doc=getActiveDocument();
+  editor.value=doc.content;
+  setDir(doc.dir,false);
+  localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
+  renderExplorer();
+  update();
+  editor.focus();
+}
+function createDocument(name,content){
+  flushSave();
+  const doc={
+    id:docId(),
+    name:uniqueDocName(name||"Untitled.md"),
+    content:content||"",
+    dir:editor.dir==="rtl" ? "rtl" : "ltr",
+  };
+  documents.push(doc);
+  activeDocumentId=doc.id;
+  editor.value=doc.content;
+  setDir(doc.dir,false);
+  renderExplorer();
+  persist(doc.content);
+  update();
+  return doc;
+}
+async function renameDocument(id){
+  const doc=documents.find(d=>d.id===id);
+  if(!doc) return;
+  const currentDot=doc.name.lastIndexOf(".");
+  const ext=currentDot>0?doc.name.slice(currentDot):"";
+  const currentBase=currentDot>0?doc.name.slice(0,currentDot):doc.name;
+  const entered=await promptModal("Rename document"+(ext?" (extension stays "+ext+")":""),currentBase,"Rename");
+  if(!entered) return;
+  let base=entered.replace(/[\/\\\x00-\x1f]/g,"-").trim();
+  if(!base) return;
+  // Rename only changes the basename. Supported file extensions typed by the
+  // user are discarded, then the document's original extension is restored.
+  base=base.replace(/\.(?:md|markdown|txt)$/i,"").trim();
+  if(!base) return;
+  const name=uniqueDocName(base+ext,id);
+  if(name===doc.name) return;
+  doc.name=name;
+  try{ localStorage.setItem(FILES_KEY,JSON.stringify(documents)); }
+  catch{ toast("Browser storage is full — download important files",true); return; }
+  renderExplorer();
+  toast("Renamed to "+name);
+}
+async function closeDocument(id){
+  const doc=documents.find(d=>d.id===id);
+  if(!doc) return;
+  if(doc.content && !await confirmModal('Close "'+doc.name+'"? It will be removed from this browser workspace.',"Close")) return;
+  flushSave();
+  const idx=documents.findIndex(d=>d.id===id);
+  documents.splice(idx,1);
+  if(!documents.length){
+    documents.push({
+      id:docId(),
+      name:"Untitled.md",
+      content:"",
+      dir:editor.dir==="rtl" ? "rtl" : "ltr",
+    });
+  }
+  if(activeDocumentId===id){
+    activeDocumentId=documents[Math.min(idx,documents.length-1)].id;
+    const nextDoc=getActiveDocument();
+    editor.value=nextDoc.content;
+    setDir(nextDoc.dir,false);
+    update();
+  }
+  localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
+  try{ localStorage.setItem(FILES_KEY,JSON.stringify(documents)); }catch{}
+  renderExplorer();
+}
+explorerToggle.onclick=()=>setExplorerOpen(explorerShell.classList.contains("collapsed"));
+newDocBtn.onclick=()=>createDocument("Untitled.md","");
+explorerFiles.addEventListener("click",e=>{
+  const row=e.target.closest(".explorer-file");
+  if(!row) return;
+  if(e.target.closest(".explorer-file-rename")) renameDocument(row.dataset.id);
+  else if(e.target.closest(".explorer-file-close")) closeDocument(row.dataset.id);
+  else activateDocument(row.dataset.id);
+});
+explorerFiles.addEventListener("dblclick",e=>{
+  const open=e.target.closest(".explorer-file-main");
+  const row=e.target.closest(".explorer-file");
+  if(open && row) renameDocument(row.dataset.id);
+});
 
 /* ============================================================
    3b. Mermaid diagrams — lazy ESM import, drawn after sanitize
@@ -1002,13 +1171,25 @@ function updateStats(text){
    every keystroke. Flushed on hide/unload so nothing is ever lost. */
 let saveTimer=null, pendingSave=null;
 function persist(text){
+  const doc=getActiveDocument();
+  if(doc) doc.content=text;
   pendingSave=text;
   clearTimeout(saveTimer);
   saveTimer=setTimeout(flushSave,300);
 }
 function flushSave(){
   clearTimeout(saveTimer);
-  if(pendingSave!==null){ localStorage.setItem(KEY,pendingSave); pendingSave=null; }
+  if(pendingSave===null) return;
+  const text=pendingSave;
+  pendingSave=null;
+  try{
+    // Keep KEY updated too: an older build can still recover the active document.
+    localStorage.setItem(KEY,text);
+    localStorage.setItem(FILES_KEY,JSON.stringify(documents));
+    localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
+  }catch{
+    toast("Browser storage is full — download important files",true);
+  }
 }
 window.addEventListener("pagehide",flushSave);
 document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
@@ -1035,7 +1216,9 @@ function update(){
   if(afterUpdate) afterUpdate();
 }
 
-editor.value = localStorage.getItem(KEY) ?? SAMPLE;
+editor.value=getActiveDocument().content;
+renderExplorer();
+setExplorerOpen(localStorage.getItem(EXPLORER_KEY)!=="closed");
 if(localStorage.getItem(THEME_KEY))
   document.documentElement.setAttribute("data-theme",localStorage.getItem(THEME_KEY));
 update();
@@ -1242,7 +1425,7 @@ function toggleTaskInMarkdown(index,checked){
 }
 preview.addEventListener("change",e=>{
   if(!e.target.matches('input[type="checkbox"]')) return;
-  if(isReading()){ e.target.checked=!e.target.checked; return; } // read-only
+  if(isReadingLocked()){ e.target.checked=!e.target.checked; return; } // read-only
   const boxes=[...preview.querySelectorAll('input[type="checkbox"]')];
   const md=toggleTaskInMarkdown(boxes.indexOf(e.target),e.target.checked);
   if(md===null){ syncPreviewToMarkdown(); return; }   // fall back to the full sync
@@ -1344,7 +1527,7 @@ preview.addEventListener("keydown",e=>{
    Outside a list Tab is left alone, so it can still move focus. */
 preview.addEventListener("keydown",e=>{
   if(e.key!=="Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
-  if(isReading() || !selectionAncestor("li")) return;
+  if(isReadingLocked() || !selectionAncestor("li")) return;
   e.preventDefault();
   document.execCommand(e.shiftKey?"outdent":"indent");
   // the browser builds a plain <ul> for the new level; re-tag it so checkbox
@@ -1407,19 +1590,50 @@ function downloadBlob(name,blob){
   URL.revokeObjectURL(a.href);
 }
 function save(){
-  downloadBlob("document.md",new Blob([editor.value],{type:"text/markdown"}));
-  toast("Saved document.md");
+  const name=getActiveDocument()?.name || "document.md";
+  downloadBlob(name,new Blob([editor.value],{type:"text/markdown"}));
+  toast("Saved "+name);
 }
-
-function loadFile(file){
-  const r=new FileReader();
-  r.onload=()=>{ editor.value=r.result; update(); toast("Imported "+file.name); };
-  r.onerror=()=>toast("Couldn't read "+file.name,true);
-  r.readAsText(file);
+function readFile(file){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(String(r.result||""));
+    r.onerror=reject;
+    r.readAsText(file);
+  });
 }
+async function loadFiles(files){
+  const accepted=Array.from(files||[]).filter(file=>
+    /\.(md|markdown|txt|text)$/i.test(file.name) || (file.type||"").startsWith("text/"));
+  if(!accepted.length){ toast("Open a .md, .markdown or .txt file",true); return; }
+  flushSave();
+  let last=null, imported=0;
+  for(const file of accepted){
+    try{
+      const content=await readFile(file);
+      const doc={
+        id:docId(),
+        name:uniqueDocName(file.name||"document.md"),
+        content,
+        dir:editor.dir==="rtl" ? "rtl" : "ltr",
+      };
+      documents.push(doc); last=doc; imported++;
+    }catch{ toast("Couldn't read "+file.name,true); }
+  }
+  if(!last) return;
+  activeDocumentId=last.id;
+  editor.value=last.content;
+  setDir(last.dir,false);
+  renderExplorer();
+  update();
+  toast(imported===1 ? "Imported "+last.name : "Imported "+imported+" files");
+}
+function loadFile(file){ return loadFiles([file]); }
 document.getElementById("openBtn").onclick=()=>document.getElementById("fileInput").click();
 document.getElementById("fileInput").onchange=e=>{
-  const f=e.target.files[0]; if(f) loadFile(f);
+  const files=Array.from(e.target.files||[]);
+  e.target.value="";
+  if(files.length) loadFiles(files);
 };
 
 document.getElementById("clearBtn").onclick=async()=>{
@@ -1570,22 +1784,38 @@ copyMenu.querySelectorAll("[data-copy]").forEach(btn=>{
    10. Text direction (LTR / RTL)
    ============================================================ */
 const dirBtn=document.getElementById("dirBtn");
-function setDir(dir){
+function setDir(dir,save=true){
+  dir=dir==="rtl" ? "rtl" : "ltr";
   editor.dir=dir;
   preview.dir=dir;
-  // looked up rather than closed over: this runs at start-up, before §17 has
-  // initialised, and a const from there would still be in its dead zone
+  // Keep the find/highlight mirror in the same direction as the editor.
   document.getElementById("hlLayer").dir=dir;
-  // swap the placeholder so it reads naturally in each direction (avoids bidi mangling)
-  editor.placeholder = dir==="rtl" ? "متن مارک‌داون را اینجا بنویسید…" : "# Write markdown here…";
-  // write into .lbl, never the button itself — textContent would drop the
-  // .ic glyph the narrow layout relies on
-  dirBtn.querySelector(".lbl").textContent = dir==="rtl" ? "LTR" : "RTL";
-  localStorage.setItem(DIR_KEY,dir);
+  // Swap the placeholder so it reads naturally in each direction.
+  editor.placeholder=dir==="rtl"
+    ? "متن مارک‌داون را اینجا بنویسید…"
+    : "# Write markdown here…";
+  // The label describes the direction the button will switch TO.
+  dirBtn.querySelector(".lbl").textContent=
+    dir==="rtl" ? "LTR" : "RTL";
+  if(save){
+    const doc=getActiveDocument();
+    if(doc){
+      doc.dir=dir;
+      try{
+        localStorage.setItem(FILES_KEY,JSON.stringify(documents));
+      }catch{
+        toast("Browser storage is full — download important files",true);
+      }
+    }
+    // Keep the old key as a migration/default value for older workspaces
+    // and newly created/imported documents.
+    localStorage.setItem(DIR_KEY,dir);
+  }
 }
-setDir(localStorage.getItem(DIR_KEY) || "ltr");
-dirBtn.onclick=()=>setDir(editor.dir==="rtl"?"ltr":"rtl");
-
+setDir(getActiveDocument().dir,false);
+dirBtn.onclick=()=>{
+  setDir(editor.dir==="rtl" ? "ltr" : "rtl");
+};
 /* ============================================================
    11. Theme toggle
    ============================================================ */
@@ -1599,22 +1829,45 @@ document.getElementById("themeBtn").onclick=()=>{
 };
 
 /* ============================================================
-   11b. Reading mode — just the rendered document, read-only
+   11b. Reading mode — distraction-free, optionally locked
    ============================================================ */
-/* Hides the chrome (header, footer, editor pane) and locks every editing
-   path: contenteditable off, formatting bar and custom context menu skipped,
-   checkboxes inert, and Ctrl+F handed back to the browser's own find. */
 function isReading(){ return document.body.classList.contains("reading"); }
+let readingLocked=false;
+const readLock=document.getElementById("readLock");
+function isReadingLocked(){ return isReading() && readingLocked; }
+function paintReadingLock(){
+  readLock.querySelector("use").setAttribute("href",readingLocked?"#i-lock":"#i-unlock");
+  readLock.setAttribute("aria-pressed",String(readingLocked));
+  readLock.setAttribute("aria-label",readingLocked?"Unlock reading mode":"Lock reading mode");
+  readLock.title=readingLocked?"Unlock reading mode":"Lock reading mode";
+}
+function setReadingLocked(locked){
+  readingLocked=!!locked;
+  document.body.classList.toggle("reading-locked",isReadingLocked());
+  preview.contentEditable=isReadingLocked()?"false":"true";
+  if(readingLocked){
+    fmtbar.hidden=true;
+    hMenu.classList.remove("open");
+    findbar.hidden=true;
+    paintHighlights();
+  }
+  paintReadingLock();
+}
 function setReading(on){
   document.body.classList.toggle("reading",on);
-  preview.contentEditable = on ? "false" : "true";
+  readingLocked=false; // entering Reading Mode is editable by default
+  document.body.classList.remove("reading-locked");
+  preview.contentEditable="true";
   fmtbar.hidden=true;
   hMenu.classList.remove("open");
   findbar.hidden=true;
-  paintHighlights();   // drop any marks left behind by an open find bar
+  paintHighlights();
+  paintReadingLock();
 }
 document.getElementById("readBtn").onclick=()=>setReading(true);
 document.getElementById("readExit").onclick=()=>setReading(false);
+readLock.onclick=()=>setReadingLocked(!readingLocked);
+paintReadingLock();
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape" && isReading() && !document.querySelector(".modal-backdrop"))
     setReading(false);
@@ -1734,7 +1987,7 @@ function positionFmtbar(rect){
 }
 
 function showFmtbarForSelection(){
-  if(isReading()){ fmtbar.hidden=true; return; }
+  if(isReadingLocked()){ fmtbar.hidden=true; return; }
   const sel=window.getSelection();
   if(!sel || sel.isCollapsed || !sel.rangeCount || !preview.contains(sel.anchorNode)){
     fmtbar.hidden=true; return;
@@ -1754,7 +2007,7 @@ preview.addEventListener("mouseup",e=>{
 preview.addEventListener("keyup",()=>setTimeout(showFmtbarForSelection,0));
 // show on right-click (also lets you insert a table with no selection)
 preview.addEventListener("contextmenu",e=>{
-  if(isReading()) return; // reading mode keeps the browser's own menu
+  if(isReadingLocked()) return; // locked reading mode keeps the browser's own menu
   e.preventDefault();
   positionFmtbar({top:e.clientY,bottom:e.clientY,left:e.clientX,width:0});
 });
@@ -1979,9 +2232,9 @@ window.addEventListener("drop",e=>{
   e.preventDefault();
   dragDepth=0;
   dropzone.classList.remove("show");
-  const f=Array.from(e.dataTransfer?.files||[])
-    .find(f=>/\.(md|markdown|txt|text)$/i.test(f.name) || (f.type||"").startsWith("text/"));
-  if(f) loadFile(f);
+  const files=Array.from(e.dataTransfer?.files||[])
+    .filter(f=>/\.(md|markdown|txt|text)$/i.test(f.name) || (f.type||"").startsWith("text/"));
+  if(files.length) loadFiles(files);
   else toast("Drop a .md, .markdown or .txt file",true);
 });
 
@@ -2139,7 +2392,7 @@ document.addEventListener("keydown",e=>{
   // e.code is the physical key, so this still fires on non-Latin layouts
   // (with a Persian layout e.key would be "ب", never "f")
   if((e.ctrlKey||e.metaKey) && (e.code==="KeyF" || e.key==="f" || e.key==="F")){
-    if(isReading()) return; // the browser's native find suits a read-only page
+    if(isReadingLocked()) return; // native find suits a locked reading page
     e.preventDefault();
     openFind();
   }
