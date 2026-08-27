@@ -456,6 +456,10 @@ function toast(msg,isErr){
     if(existing.textContent===msg) return;
   const t=document.createElement("div");
   t.className="toast"+(isErr?" err":"");
+  /* #toasts is a polite live region, which is right for "Saved" or "Imported".
+     A failure should cut in instead, and aria-live on the added node itself
+     governs how that node's arrival is announced. */
+  if(isErr) t.setAttribute("aria-live","assertive");
   t.textContent=msg;
   toastHost.appendChild(t);
   setTimeout(()=>{ t.classList.add("out"); setTimeout(()=>t.remove(),250); },2200);
@@ -464,16 +468,34 @@ function toast(msg,isErr){
 /* Every dialog shares the same shell: a backdrop, Escape and click-outside to
    dismiss, Enter to confirm, and Tab cycling trapped inside. Callers supply only
    the body markup, how to read a result, and what to focus. */
+let modalSeq=0;
 function openModal({body,okLabel="OK",cancelValue,readResult,onOpen}){
   return new Promise(resolve=>{
     const back=document.createElement("div");
     back.className="modal-backdrop";
-    back.innerHTML=`<div class="modal">${body}<div class="actions">`+
+    back.innerHTML=`<div class="modal" role="dialog" aria-modal="true">${body}`+
+      `<div class="actions">`+
       `<button class="cancel">Cancel</button>`+
       `<button class="primary">${okLabel}</button></div></div>`;
+    /* Give the dialog a name from its own first paragraph — every caller opens
+       with one — so it is announced as more than "dialog". */
+    const panel=back.querySelector(".modal");
+    const title=panel.querySelector("p");
+    if(title){
+      title.id="modal-title-"+(++modalSeq);
+      panel.setAttribute("aria-labelledby",title.id);
+    }
+    /* Focus moves into the dialog and has to come back out again, or a keyboard
+       user is dropped at the top of the page when it closes. */
+    const returnTo=document.activeElement;
     document.body.appendChild(back);
 
-    const close=v=>{ back.remove(); document.removeEventListener("keydown",onKey); resolve(v); };
+    const close=v=>{
+      back.remove();
+      document.removeEventListener("keydown",onKey);
+      if(returnTo && returnTo.isConnected && returnTo.focus) returnTo.focus();
+      resolve(v);
+    };
     const cancel=()=>close(cancelValue);
     const confirm=()=>close(readResult(back));
     const onKey=e=>{
@@ -585,7 +607,7 @@ Done reading? Hit **Clear** in the toolbar to start your own document (\`Ctrl+Z\
 
 ## Text
 
-**Bold**, *italic*, ~~strikethrough~~, \`inline code\`, and [links](https://github.com/vahidaskari/md-editor). Bare URLs turn into links on their own: https://daringfireball.net/projects/markdown/
+**Bold**, *italic*, ~~strikethrough~~, \`inline code\`, and [links](https://markdowneditor.ir/). Bare URLs turn into links on their own: https://github.com/vahidaskari/md-editor
 
 Select any text in the preview — or right-click it — for a formatting toolbar.
 
@@ -770,6 +792,7 @@ function activateDocument(id){
   const doc=getActiveDocument();
   editor.value=doc.content;
   setDir(doc.dir,false);
+  beginHistory();   // this document's own undo stack, kept across switches
   localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
   renderExplorer();
   update();
@@ -787,6 +810,7 @@ function createDocument(name,content){
   activeDocumentId=doc.id;
   editor.value=doc.content;
   setDir(doc.dir,false);
+  beginHistory();
   renderExplorer();
   persist(doc.content);
   update();
@@ -821,6 +845,7 @@ async function closeDocument(id){
   flushSave();
   const idx=documents.findIndex(d=>d.id===id);
   documents.splice(idx,1);
+  forgetHistory(id);   // nothing left to undo into
   if(!documents.length){
     documents.push({
       id:docId(),
@@ -834,6 +859,7 @@ async function closeDocument(id){
     const nextDoc=getActiveDocument();
     editor.value=nextDoc.content;
     setDir(nextDoc.dir,false);
+    beginHistory();
     update();
   }
   localStorage.setItem(ACTIVE_FILE_KEY,activeDocumentId);
@@ -1194,12 +1220,14 @@ function flushSave(){
 window.addEventListener("pagehide",flushSave);
 document.addEventListener("visibilitychange",()=>{ if(document.hidden) flushSave(); });
 
-/* Set by §17 once it has initialised. Every path that changes the document
-   funnels through update() — typing, importing, clearing, and the sync back
-   from the editable preview, which assigns editor.value without firing
-   `input` — so this is the one place a listener would miss nothing. It stays
-   null until then because update() already runs during start-up. */
-let afterUpdate=null;
+/* Callbacks run after every document change. Every path that changes the
+   document funnels through update() — typing, importing, clearing, switching
+   files, and the sync back from the editable preview, which assigns
+   editor.value without firing `input` — so this is the one place a listener
+   would miss nothing. Sections register into it as they initialise; at
+   start-up it is still empty, which is why the very first update() records
+   no history and paints no highlights. */
+const afterUpdate=[];
 
 function update(){
   const v=editor.value;
@@ -1213,10 +1241,112 @@ function update(){
   scheduleHighlight();
   persist(v);
   updateStats(v);
-  if(afterUpdate) afterUpdate();
+  for(const fn of afterUpdate) fn();
 }
 
+/* ============================================================
+   4b. Undo history — one stack per open document
+   ============================================================ */
+/* The browser keeps a single native undo stack per <textarea>, and assigning
+   editor.value wipes it. Switching documents does exactly that, so after a
+   switch Ctrl+Z had nothing left to undo — in any document. The only way to
+   give each document its own history is to stop relying on the native stack
+   and keep our own, which is what this does: snapshots of the text and the
+   caret, held per document id and never written to storage. */
+const histories=new Map();
+const UNDO_STEPS=200;          // entries per document
+const UNDO_CHARS=4_000_000;    // …and a total size ceiling, for large documents
+const TYPING_GAP=600;          // ms of quiet that ends one "typing burst"
+
+function snapshot(){
+  return {v:editor.value,a:editor.selectionStart,b:editor.selectionEnd};
+}
+function history(){
+  let h=histories.get(activeDocumentId);
+  if(!h){
+    h={past:[],future:[],current:snapshot(),stamp:0};
+    histories.set(activeDocumentId,h);
+  }
+  return h;
+}
+/* Called when a document becomes the active one, so its first edit has a
+   before-state to fall back to rather than capturing itself after the fact. */
+function beginHistory(){ history(); }
+function forgetHistory(id){ histories.delete(id); }
+
+function trimHistory(past){
+  while(past.length>UNDO_STEPS) past.shift();
+  let chars=0;
+  for(const s of past) chars+=s.v.length;
+  while(past.length>1 && chars>UNDO_CHARS) chars-=past.shift().v.length;
+}
+
+let applyingHistory=false;
+function noteEdit(){
+  if(applyingHistory) return;          // undo/redo must not record themselves
+  const h=history();
+  if(h.current.v===editor.value){      // no textual change: keep the caret fresh
+    h.current=snapshot();
+    return;
+  }
+  const now=Date.now();
+  /* Coalesce a run of single-character edits into one undo step, the way the
+     native stack does — otherwise Ctrl+Z would walk back letter by letter. A
+     pause, or any larger change, ends the run. */
+  const sameBurst = now-h.stamp<TYPING_GAP &&
+                    Math.abs(editor.value.length-h.current.v.length)<=1;
+  if(!sameBurst){
+    h.past.push(h.current);
+    trimHistory(h.past);
+  }
+  h.current=snapshot();
+  h.stamp=now;
+  h.future.length=0;                   // a fresh edit discards the redo branch
+}
+
+function applySnapshot(s){
+  applyingHistory=true;
+  try{
+    editor.value=s.v;
+    editor.setSelectionRange(s.a,s.b);
+    update();
+  }finally{ applyingHistory=false; }
+  editor.focus();
+}
+function undoEdit(){
+  const h=history();
+  if(!h.past.length) return false;
+  h.future.push(h.current);
+  h.current=h.past.pop();
+  h.stamp=0;                           // never coalesce across an undo
+  applySnapshot(h.current);
+  return true;
+}
+function redoEdit(){
+  const h=history();
+  if(!h.future.length) return false;
+  h.past.push(h.current);
+  h.current=h.future.pop();
+  h.stamp=0;
+  applySnapshot(h.current);
+  return true;
+}
+
+/* We own undo inside the editor now, so the native shortcut has to be stopped
+   — otherwise the browser would undo its own stack underneath us. e.code is
+   the physical key, so this still fires on a non-Latin keyboard layout. The
+   preview pane is left alone: it is a contenteditable with its own history. */
+editor.addEventListener("keydown",e=>{
+  if(!(e.ctrlKey||e.metaKey) || e.altKey) return;
+  const z=e.code==="KeyZ" || e.key==="z" || e.key==="Z";
+  const y=e.code==="KeyY" || e.key==="y" || e.key==="Y";
+  if(z && !e.shiftKey){ e.preventDefault(); undoEdit(); }
+  else if((z && e.shiftKey) || y){ e.preventDefault(); redoEdit(); }
+});
+afterUpdate.push(noteEdit);
+
 editor.value=getActiveDocument().content;
+beginHistory();
 renderExplorer();
 setExplorerOpen(localStorage.getItem(EXPLORER_KEY)!=="closed");
 if(localStorage.getItem(THEME_KEY))
@@ -1624,6 +1754,7 @@ async function loadFiles(files){
   activeDocumentId=last.id;
   editor.value=last.content;
   setDir(last.dir,false);
+  beginHistory();
   renderExplorer();
   update();
   toast(imported===1 ? "Imported "+last.name : "Imported "+imported+" files");
@@ -1879,7 +2010,12 @@ document.addEventListener("keydown",e=>{
 function setSplit(pct){
   pct=Math.min(85,Math.max(15,pct));
   editPane.style.flexBasis=pct+"%";
+  // the divider is a real separator widget, so it reports where it now sits
+  divider.setAttribute("aria-valuenow",String(Math.round(pct)));
   localStorage.setItem(SPLIT_KEY,pct);
+}
+function currentSplit(){
+  return parseFloat(divider.getAttribute("aria-valuenow"))||50;
 }
 if(localStorage.getItem(SPLIT_KEY)) setSplit(parseFloat(localStorage.getItem(SPLIT_KEY)));
 
@@ -1913,6 +2049,37 @@ function startDrag(e){
 divider.addEventListener("mousedown",startDrag);
 divider.addEventListener("touchstart",startDrag,{passive:false});
 divider.addEventListener("dblclick",()=>setSplit(50));
+/* Dragging is a pointer gesture with no keyboard equivalent, which left the
+   split unreachable without a mouse. The arrow keys nudge it, Shift jumps,
+   Home/End go to the extremes and Enter re-centres — the conventions a
+   separator widget is expected to follow. */
+divider.addEventListener("keydown",e=>{
+  const stacked=main.clientWidth>0 && getComputedStyle(main).flexDirection==="column";
+  const back = stacked ? "ArrowUp" : "ArrowLeft";
+  const fwd  = stacked ? "ArrowDown" : "ArrowRight";
+  const step = e.shiftKey ? 10 : 2;
+  let pct=currentSplit();
+  switch(e.key){
+    case back:      pct-=step; break;
+    case fwd:       pct+=step; break;
+    case "Home":    pct=15; break;
+    case "End":     pct=85; break;
+    case "Enter":
+    case " ":       pct=50; break;
+    default: return;
+  }
+  e.preventDefault();
+  setSplit(pct);
+});
+/* Stacked panes are separated by a horizontal line, not a vertical one, and a
+   screen reader announces the two differently. */
+if(window.matchMedia){
+  const stack=window.matchMedia("(max-width: 720px)");
+  const paintOrientation=()=>
+    divider.setAttribute("aria-orientation",stack.matches?"horizontal":"vertical");
+  paintOrientation();
+  if(stack.addEventListener) stack.addEventListener("change",paintOrientation);
+}
 
 /* ============================================================
    13. Synced scrolling
@@ -2386,7 +2553,7 @@ function closeFind(){
 /* Any edit moves the matches after it, so the layer has to be redrawn.
    paintHighlights is a no-op while the bar is closed, which is most of the
    time, so this costs nothing on the common path. */
-afterUpdate=paintHighlights;
+afterUpdate.push(paintHighlights);
 
 document.addEventListener("keydown",e=>{
   // e.code is the physical key, so this still fires on non-Latin layouts

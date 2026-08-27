@@ -190,7 +190,13 @@
                 autocapitalize="off" placeholder="# Write markdown here…"></textarea>
     </div>
   </div>
-  <div class="divider" id="divider" title="Drag to resize"></div>
+  <!-- A real separator, not decoration: it carries the split percentage so a
+       screen reader can report it, and it is focusable so the panes can be
+       resized with the arrow keys as well as with a pointer. -->
+  <div class="divider" id="divider" title="Drag to resize, or focus and use the arrow keys"
+       role="separator" tabindex="0" aria-orientation="vertical"
+       aria-label="Resize editor and preview panes"
+       aria-valuemin="15" aria-valuemax="85" aria-valuenow="50"></div>
   <div class="pane preview-pane">
     <div class="preview" id="preview"></div>
   </div>
@@ -237,7 +243,9 @@
   <div class="box">⬇ Drop a <b>.md</b> file to import</div>
 </div>
 
-<div id="toasts"></div>
+<!-- Status messages. The live region means "Saved", "Imported" and the
+     error messages are announced, not just shown. -->
+<div id="toasts" role="status" aria-live="polite"></div>
 
 <!-- Hover target URL, like the browser's own status bar (suppressed for links
      inside contenteditable, so we provide our own) -->
