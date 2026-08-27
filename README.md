@@ -16,44 +16,47 @@ No build step. No server. No account. Just open it and write.
 
 ---
 
-Open the page and type. The left pane is markdown, the right is the rendered document, and both are editable — so you can format text by selecting it in the preview instead of remembering the syntax.
+The right pane is not just a preview, you can write in it. Click in and type, or select text and a formatting toolbar appears; everything you do is written back as markdown on the left. The left pane is the markdown source, and the two stay in step. You can keep several documents open at once and switch between them from the explorer on the left.
 
-Your document is saved in your own browser and never sent anywhere. There is no backend.
+Everything you open is saved in your own browser and never sent anywhere. There is no backend.
 
 ## Features
 
+**Workspace**
+
+- **Explorer**: keep several documents open at once, switch between them, create, rename and close them
+- **Import**: open one or more `.md` files, or drag them onto the window
+- **Autosave**: every open document is kept in this browser as you write, and the workspace comes back on your next visit
+
 **Writing**
 
-- **Live preview** — renders as you type, in a resizable split view
-- **Editable preview** — type directly into the rendered side; it syncs back to markdown
-- **Formatting toolbar** — select text or right-click inside the preview for bold, italic, code, headings (H1–H6), lists, links and tables
-- **Find & replace** — `Ctrl/Cmd + F`, with a match count and undoable replacements
-- **Smart lists** — Enter continues the current bullet, number or checkbox; Tab nests it
+- **Live preview**: renders as you type, in a resizable split view
+- **Editable preview**: type directly into the rendered side; it syncs back to markdown
+- **Formatting toolbar**: select text or right-click inside the preview for bold, italic, code, headings (H1–H6), lists, links and tables
+- **Find & replace**: `Ctrl/Cmd + F`, with a match count and undoable replacements
+- **Smart lists**: Enter continues the current bullet, number or checkbox; Tab nests it
 
 **Rendering**
 
-- **Nested lists** and **checklists** — `- [ ]` / `- [x]` become real checkboxes you can tick
+- **Nested lists** and **checklists**: `- [ ]` / `- [x]` become real checkboxes you can tick
 - **Tables** with `:---:` column alignment, or insert one at any size
-- **Syntax highlighting** — name a language on a fence and the code is coloured
-- **Mermaid diagrams** — a ```` ```mermaid ```` fence renders live (flowchart, sequence, class, gantt…)
-- **LaTeX math** — inline `$…$` and display `$$…$$`, rendered with KaTeX
-- **Footnotes** — `text[^1]` collects into a linked list at the end
-- **Autolinks, reference links & inline HTML** — bare URLs become links, `[text][ref]` resolves against `[ref]: url`, and `<details>` blocks work
+- **Syntax highlighting**: name a language on a fence and the code is coloured
+- **Mermaid diagrams**: a ```` ```mermaid ```` fence renders live (flowchart, sequence, class, gantt…)
+- **LaTeX math**: inline `$…$` and display `$$…$$`, rendered with KaTeX
+- **Footnotes**: `text[^1]` collects into a linked list at the end
+- **Autolinks, reference links & inline HTML**: bare URLs become links, `[text][ref]` resolves against `[ref]: url`, and `<details>` blocks work
 
 **Output**
 
-- **Export** — Markdown, PDF (through the browser's own print engine, so the text stays selectable) or a self-contained HTML file
-- **Copy** — as Markdown, HTML or plain text
-- **Import** — open one or multiple `.md` files, or drag them onto the window
+- **Export**: Markdown, PDF (through the browser's own print engine, so the text stays selectable) or a self-contained HTML file
+- **Copy**: as Markdown, HTML or plain text
 
 **Comfort**
 
-- **Explorer** — keep multiple documents open, switch between them, create or rename documents and keep the workspace across reloads
-- **Reading mode** — distraction-free and editable by default; use the lock button for a fully read-only view
+- **Reading mode**: distraction-free and editable by default; use the lock button for a fully read-only view
 - **Dark & light themes**, remembered between visits
-- **RTL / LTR** — full right-to-left support for Persian, Arabic and Hebrew, remembered independently for each document
+- **RTL / LTR**: full right-to-left support for Persian, Arabic and Hebrew, remembered independently for each document
 - **Sync scroll** between the two panes (toggleable)
-- **Autosave** — every open document and the active workspace are kept in this browser as you write
 
 ## Markdown it understands
 
@@ -63,7 +66,7 @@ Your document is saved in your own browser and never sent anywhere. There is no 
 | `` `code` `` | inline code |
 | `# H1` … `###### H6` | headings |
 | `> quote` | blockquote |
-| `- item` / `1. item` | lists — indent to nest |
+| `- item` / `1. item` | lists, indent to nest |
 | `- [ ]` / `- [x]` | checkboxes |
 | `[text](url)` or a bare URL | links |
 | `[text][ref]` + `[ref]: url` | reference links |
@@ -80,11 +83,11 @@ Your document is saved in your own browser and never sent anywhere. There is no 
 | --- | --- |
 | `Ctrl/Cmd + S` | Save as `.md` |
 | `Ctrl/Cmd + F` | Find & replace |
-| `Ctrl/Cmd + Z` | Undo — including Clear and Replace all |
+| `Ctrl/Cmd + Z` | Undo, including Clear and Replace all |
 | `Enter` | Continue the current list / checklist |
 | `Tab` | Indent (nests a list item) |
 | `Esc` | Close the find bar, a dialog, or reading mode |
 
 ## Privacy
 
-Everything runs client-side. There is no analytics, no account, and no upload — your document lives in this browser's local storage and nowhere else. The diagram, math and highlighting libraries are fetched from a CDN the first time a document actually uses one of them, and never on a document that doesn't.
+Everything runs client-side. There is no analytics, no account, and no upload. Your document lives in this browser's local storage and nowhere else. The diagram, math and highlighting libraries are fetched from a CDN the first time a document actually uses one of them, and never on a document that doesn't.

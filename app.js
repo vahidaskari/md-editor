@@ -599,19 +599,23 @@ const SYNC_KEY  = "md-editor-sync";
    keywords would only make the tool look cheap. */
 const SAMPLE=`# Welcome to Markdown Editor
 
-A fast markdown editor that runs entirely in your browser. No build step, no server, no account — and nothing you write ever leaves this device.
+**This preview is editable.** Click into the text on the right and type, or select a few words and a formatting toolbar appears. It all gets written back as markdown on the left, so you never have to remember the syntax.
 
-**Everything on this page is markdown.** Edit the left pane and the right updates as you type. Or click straight into the preview and type there — it syncs back to markdown for you.
+A fast markdown editor that runs entirely in your browser. No build step, no server, no account, and nothing you write ever leaves this device.
 
-Done reading? Hit **Clear** in the toolbar to start your own document (\`Ctrl+Z\` brings this back).
+Done reading? Hit **+** in the explorer to start a document of your own, or **Clear** to empty this one (\`Ctrl+Z\` brings it back).
 
 ## Text
 
 **Bold**, *italic*, ~~strikethrough~~, \`inline code\`, and [links](https://markdowneditor.ir/). Bare URLs turn into links on their own: https://github.com/vahidaskari/md-editor
 
-Select any text in the preview — or right-click it — for a formatting toolbar.
+Select any text in the preview (or right-click it) for a formatting toolbar.
 
 > Blockquotes are good for asides, tips and pull quotes.
+
+## Your files
+
+The panel on the left holds every document you have open. Hit **+** for a new one, click a name to switch, and the double-click (or the ✎) renames it. Each document keeps its own text direction and its own undo history, and the whole workspace comes back the next time you open the page.
 
 ## Lists
 
@@ -625,7 +629,7 @@ Select any text in the preview — or right-click it — for a formatting toolba
 ## Checklists
 
 - [x] Write something in markdown
-- [ ] Tick this box — the markdown updates itself
+- [ ] Tick this box and the markdown updates itself
   - [ ] Nested tasks work as well
 
 ## Tables
@@ -657,7 +661,7 @@ const sum = xs => xs.reduce((a, b) => a + b, 0);
 
 ## Diagrams
 
-A fence tagged \`mermaid\` becomes a live diagram — flowcharts, sequence, class, gantt and more:
+A fence tagged \`mermaid\` becomes a live diagram. Flowcharts, sequence, class, gantt and more:
 
 \`\`\`mermaid
 graph LR
@@ -679,7 +683,7 @@ $$
 
 Reference a note[^1] and it collects itself at the bottom of the document.
 
-[^1]: Like this one — the ↩ arrow jumps back to where you were reading.
+[^1]: Like this one. The ↩ arrow jumps back to where you were reading.
 
 ## Collapsible sections
 
@@ -692,11 +696,11 @@ Hidden until you open it, and markdown still works inside.
 
 ## In the toolbar
 
-- **Export** — Markdown, PDF or a standalone HTML file
-- **Copy** — as Markdown, HTML or plain text
-- **Reading Mode** — hides everything but your document; \`Esc\` to leave
-- **⇄ RTL** — full right-to-left for Persian, Arabic and Hebrew
-- **◑ Theme** — dark and light, remembered between visits
+- **Export**: Markdown, PDF or a standalone HTML file
+- **Copy**: as Markdown, HTML or plain text
+- **Reading Mode**: hides everything but your document; \`Esc\` to leave
+- **⇄ RTL**: full right-to-left for Persian, Arabic and Hebrew
+- **◑ Theme**: dark and light, remembered between visits
 - Drag the divider to resize the panes, or double-click it to even them out
 
 ## Shortcuts
@@ -705,14 +709,14 @@ Hidden until you open it, and markdown still works inside.
 |:--|:--|
 | \`Ctrl/Cmd + S\` | Save as \`.md\` |
 | \`Ctrl/Cmd + F\` | Find & replace |
-| \`Ctrl/Cmd + Z\` | Undo — including Clear and Replace all |
+| \`Ctrl/Cmd + Z\` | Undo, including Clear and Replace all |
 | \`Enter\` | Continue the current list or checklist |
 | \`Tab\` | Indent (nests a list item) |
 | \`Esc\` | Close the find bar, a dialog, or reading mode |
 
 ---
 
-Your work saves to this browser as you type, and you can drag a \`.md\` file onto the window to open it.
+Your work saves to this browser as you type, and you can drag one or more \`.md\` files onto the window to open them.
 `;
 
 /* Multi-document workspace. `editor.value` remains the active document's source
