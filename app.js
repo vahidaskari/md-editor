@@ -58,6 +58,51 @@ function safeSrc(u){
 // ALLOWED_TAGS afterwards, so this only decides what reaches the sanitizer)
 const INLINE_HTML=/&lt;(\/?)(sub|sup|kbd|mark|u|s|small|abbr|cite|q|samp|var|ins|del|b|i|em|strong|br)\s*(\/?)&gt;/gi;
 
+/* Code spans, scanned rather than matched. A span opens on a run of N
+   backticks and closes on the next run of exactly N, so ``a ` b`` can hold a
+   backtick of its own. As a regex that needs a backreference and a lazy body,
+   which backtracks catastrophically on a document of long backtick runs;
+   collecting the runs once and pairing them off left to right does not.
+
+   One space is stripped from each end when the content has both and is not all
+   spaces — that is how a span starting or ending with a backtick is written. */
+function stashCodeSpans(t,codes){
+  if(t.indexOf("`")===-1) return t;
+  const runs=[];
+  for(let i=0;i<t.length;i++){
+    if(t[i]!=="`") continue;
+    let n=1;
+    while(t[i+n]==="`") n++;
+    runs.push({at:i,len:n,escaped:i>0 && t[i-1]==="\\"});
+    i+=n-1;
+  }
+  // one cursor per run length, so pairing never rescans
+  const byLen=new Map();
+  runs.forEach((r,idx)=>{
+    if(!byLen.has(r.len)) byLen.set(r.len,[]);
+    byLen.get(r.len).push(idx);
+  });
+  const cursor=new Map();
+  let out="", cut=0, k=0;
+  while(k<runs.length){
+    const open=runs[k];
+    if(open.escaped){ k++; continue; }
+    const same=byLen.get(open.len);
+    let c=cursor.get(open.len)||0;
+    while(c<same.length && same[c]<=k) c++;
+    cursor.set(open.len,c);
+    if(c>=same.length){ k++; continue; }          // never closed: leave as text
+    const close=runs[same[c]];
+    let body=t.slice(open.at+open.len,close.at);
+    if(body.length>1 && body[0]===" " && body[body.length-1]===" " && /[^ ]/.test(body))
+      body=body.slice(1,-1);
+    out+=t.slice(cut,open.at)+"\x00C"+(codes.push(body)-1)+"\x00";
+    cut=close.at+close.len;
+    while(k<runs.length && runs[k].at<cut) k++;   // resume after the closer
+  }
+  return out+t.slice(cut);
+}
+
 function inline(t){
   /* Code spans are stashed before EVERYTHING else and restored untouched at
      the very end: their text is already escaped exactly once by the caller, so
@@ -66,7 +111,7 @@ function inline(t){
      became math). A backslash before the opening backtick means "literal
      backtick", so that spelling is left for the escape pass below. */
   const codes=[];
-  t = t.replace(/(?<!\\)`([^`]+)`/g,(m,c)=>"\x00C"+(codes.push(c)-1)+"\x00");
+  t = stashCodeSpans(t,codes);
 
   /* Backslash escapes: "\X" for an ASCII-punctuation X becomes a literal X,
      tucked into a placeholder so no later rule reads it as syntax; restored
@@ -85,15 +130,19 @@ function inline(t){
   // footnote references — an undefined label stays literal text
   t = t.replace(FOOTNOTE_REF,(m,label)=>footnoteRef(label) || m);
   // images ![alt](src)
-  t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+  /* Every label and destination class below also excludes "[". Unbounded, a
+     document of unclosed "[a](" runs the destination to the end of the file and
+     back for every bracket in it, which is quadratic and hangs the tab. A link
+     whose text or URL contains a bracket is vanishingly rare next to that. */
+  t = t.replace(/!\[([^\]\[]*)\]\(([^)\s\[\]]+)(?:\s+"([^"]*)")?\)/g,
       (m,alt,src,ti)=>`<img src="${safeSrc(src)}" alt="${attrValue(alt)}"${ti?` title="${attrValue(ti)}"`:""}>`);
   // links [text](href)
-  t = t.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+  t = t.replace(/\[([^\]\[]+)\]\(([^)\s\[\]]+)(?:\s+"([^"]*)")?\)/g,
       (m,txt,href,ti)=>`<a href="${safeHref(href)}"${ti?` title="${attrValue(ti)}"`:""} target="_blank" rel="noopener noreferrer">${txt}</a>`);
   // reference forms, after the inline ones so [x](y) always wins
-  t = t.replace(/(!?)\[([^\]]+)\]\[([^\]]*)\]/g,
+  t = t.replace(/(!?)\[([^\]\[]+)\]\[([^\]\[]*)\]/g,
       (m,bang,txt,label)=>referenceHTML(txt,label,bang==="!") || m);
-  t = t.replace(/(!?)\[([^\]]+)\]/g,
+  t = t.replace(/(!?)\[([^\]\[]+)\]/g,
       (m,bang,txt)=>referenceHTML(txt,"",bang==="!") || m);
   // bold / italic / strike / code. The (?!\s)…(?<![\s*]) guards let ** span
   // inner single *, so "**bold *italic* bold**" nests, without breaking "***x***".
@@ -109,15 +158,39 @@ function inline(t){
         (m,e)=>`<a href="mailto:${attrValue(e)}">${e}</a>`);
   // restore the inline HTML tags that were escaped on the way in
   t = t.replace(INLINE_HTML,(m,close,tag,selfclose)=>`<${close}${tag}${selfclose}>`);
-  // Autolink bare URLs. The leading alternatives swallow existing links, code
-  // spans and any other tag first, so the capture group only ever fires on
-  // plain text — a URL already inside href="…" is never touched. Trailing
-  // sentence punctuation is left out of the link.
+  /* Autolink bare URLs, "www." hosts and email addresses, the way GitHub does.
+     The leading alternatives swallow existing links, code spans and any other
+     tag first, so the capture groups only ever fire on plain text: a URL
+     already inside href="…" is never touched. */
+  const trimTail=u=>{
+    // GFM drops trailing sentence punctuation, and a closing paren that has no
+    // opener inside the URL — so "(see https://x.org/a)" links only the URL.
+    for(;;){
+      const last=u[u.length-1];
+      if(!last) break;
+      if(".,;:!?".includes(last)){ u=u.slice(0,-1); continue; }
+      if(last===")"){
+        const opens=(u.match(/\(/g)||[]).length, closes=(u.match(/\)/g)||[]).length;
+        if(closes>opens){ u=u.slice(0,-1); continue; }
+      }
+      break;
+    }
+    return u;
+  };
+  const linkTo=(href,text)=>
+    `<a href="${safeHref(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
   t = t.replace(
-    /<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>|<[^>]+>|(https?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]])/g,
-    (m,url)=>url
-      ? `<a href="${safeHref(url)}" target="_blank" rel="noopener noreferrer">${url}</a>`
-      : m);
+    /<a\b[^>]*>[^]*?<\/a>|<code\b[^>]*>[^]*?<\/code>|<[^>]+>|(https?:\/\/[^\s<>"'`]+)|(www\.[^\s<>"'`]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g,
+    (m,url,www,mail)=>{
+      if(url){ const u=trimTail(url); return linkTo(u,u)+url.slice(u.length); }
+      if(www){ const u=trimTail(www); return linkTo("http://"+u,u)+www.slice(u.length); }
+      if(mail){
+        // a trailing dot or dash is not part of an address
+        const e=mail.replace(/[.\-_]+$/,"");
+        return `<a href="mailto:${attrValue(e)}">${e}</a>`+mail.slice(e.length);
+      }
+      return m;
+    });
   // put the math back (a placeholder §3c fills in), then the escaped literals,
   // then the untouched code spans
   t = t.replace(/\x00M(\d+)\x00/g,(m,i)=>
@@ -203,25 +276,50 @@ function referenceHTML(text,label,image){
     : `<a href="${safeHref(def.href)}"${title} target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
 
-const TASK_ITEM=/^\[([ xX])\]\s+(.*)$/;
+/* The content after the box is optional: "- [ ]" on its own is an empty
+   checklist item, which is how you start a list before filling it in.
+   Whitespace is still required before any content, so "- [x]done" stays
+   ordinary text rather than becoming a checkbox. */
+const TASK_ITEM=/^\[([ xX])\](?:\s+(.*))?$/;
 const isTaskItem=item=>TASK_ITEM.test(item);
 const LIST_ITEM=/^(\s*)([-*+]|\d+\.)\s+(.*)$/;
 const isOrderedMarker=marker=>/\d/.test(marker);
 
-// one <li> (plus any nested list), rendered as a checkbox for a GFM task item
-function listItemHTML(item,sub){
-  const m=item.match(TASK_ITEM);
-  if(!m) return `<li>${inline(escapeHtml(item))}${sub}</li>`;
-  const checked=m[1].toLowerCase()==="x" ? " checked" : "";
-  // aria-label: a bare checkbox has no accessible name for screen readers
-  const label=attrValue(escapeHtml(m[2].trim() || "Task"));
-  return `<li class="task-item"><input type="checkbox"${checked} aria-label="${label}"> `+
-         `${inline(escapeHtml(m[2]))}${sub}</li>`;
+/* A list item's content is everything after its marker, plus any later lines
+   indented to sit under that content, plus the blank lines between them. That
+   block is dedented and rendered recursively, which is what lets one item hold
+   a second paragraph, an indented code block, or a nested list. */
+const indentWidth=l=>l.match(/^[ 	]*/)[0].replace(/	/g,"    ").length;
+
+function listItemHTML(body){
+  let cls="", box="";
+  const t=body[0].match(TASK_ITEM);
+  if(t){
+    const checked=t[1].toLowerCase()==="x" ? " checked" : "";
+    const text=t[2] || "";
+    // aria-label: a bare checkbox has no accessible name for screen readers
+    box=`<input type="checkbox"${checked} aria-label="${attrValue(escapeHtml(text.trim() || "Task"))}"> `;
+    cls=' class="task-item"';
+    body=[text].concat(body.slice(1));
+  }
+  /* A tight item (no blank line in it) keeps the shape it has always had —
+     text directly inside the <li> — so the markdown round trip is unchanged.
+     Only an item that really holds several blocks gets wrapped in <p>. */
+  // Only a blank line with content after it makes an item loose. A body that
+  // is blank from the start is just an empty item ("- [ ]"), still tight.
+  const tight=!body.some((l,n)=>n>0 && /^\s*$/.test(l));
+  let inner=renderLines(body);
+  if(tight) inner=inner.replace(/^<p>([\s\S]*?)<\/p>/,"$1");
+  if(box){
+    // the checkbox opens the item's first block, whatever kind of block it is
+    const withBox = tight ? box+inner : inner.replace(/^<p>/,"<p>"+box);
+    inner = withBox===inner ? box+inner : withBox;
+  }
+  return `<li${cls}>${inner}</li>`;
 }
 
-/* One level of a list, recursing into deeper indents; returns [html, nextLine].
-   Caller guarantees lines[start] is a list item. Indentation alone decides
-   nesting, and switching marker kind (bullet ↔ number) starts a new list. */
+/* One list; returns [html, nextLine]. Caller guarantees lines[start] is an
+   item. Switching marker kind (bullet vs number) starts a new list. */
 function renderList(lines,start){
   const open=lines[start].match(LIST_ITEM);
   const indent=open[1].length;
@@ -230,28 +328,63 @@ function renderList(lines,start){
   let i=start;
   while(i<lines.length){
     const m=lines[i].match(LIST_ITEM);
-    if(!m || m[1].length<indent) break;              // dedent → this level ends
-    if(m[1].length>indent){                          // indent → nest under the last item
-      if(!items.length) break;
-      const [sub,next]=renderList(lines,i);
-      items[items.length-1].sub+=sub;
-      i=next;
-      continue;
-    }
-    if(isOrderedMarker(m[2])!==ordered) break;
-    items.push({text:m[3],sub:""});
+    if(!m || m[1].length!==indent || isOrderedMarker(m[2])!==ordered) break;
+    // the column the item's own text starts at: marker plus the spaces after it
+    const marker=lines[i].match(/^(\s*)([-*+]|\d+\.)(\s+)/);
+    const width=marker ? marker[0].length : indent+2;
+    const strip=new RegExp("^ {0,"+width+"}");
+    const body=[m[3]];
     i++;
+    while(i<lines.length){
+      if(/^\s*$/.test(lines[i])){
+        // a blank line only stays inside the item if indented content follows
+        let j=i;
+        while(j<lines.length && /^\s*$/.test(lines[j])) j++;
+        if(j<lines.length && indentWidth(lines[j])>=width){
+          for(;i<j;i++) body.push("");
+          continue;
+        }
+        break;
+      }
+      if(indentWidth(lines[i])>=width){ body.push(lines[i].replace(strip,"")); i++; continue; }
+      // a nested list indented by less than a full marker width still nests
+      if(LIST_ITEM.test(lines[i]) && indentWidth(lines[i])>indent){
+        body.push(lines[i].replace(strip,"")); i++; continue;
+      }
+      if(LIST_ITEM.test(lines[i])) break;
+      // a plain line straight after the item continues its paragraph (lazy
+      // continuation), but a new block construct ends the item
+      if(/^(#{1,6}\s|>|```|~~~|\s*\$\$|(\s*[-*_]){3,}\s*$)/.test(lines[i])) break;
+      body.push(lines[i]); i++;
+    }
+    items.push(body);
   }
   const tag=ordered?"ol":"ul";
-  const cls=(!ordered && items.some(it=>isTaskItem(it.text))) ? ' class="task-list"' : "";
-  return [`<${tag}${cls}>`+items.map(it=>listItemHTML(it.text,it.sub)).join("")+`</${tag}>`, i];
+  const cls=(!ordered && items.some(b=>isTaskItem(b[0]))) ? ' class="task-list"' : "";
+  const startAttr=ordered && open[2] !== "1." ? ` start="${parseInt(open[2],10)}"` : "";
+  return [`<${tag}${cls}${startAttr}>`+items.map(listItemHTML).join("")+`</${tag}>`, i];
+}
+
+/* HTML comments are hidden, as in real markdown. Scanned rather than matched:
+   a lazy regex is quadratic on a document full of "<!--" with no "-->", since
+   each opener rescans to the end of the file before failing. Here the first
+   opener without a closer ends the search, because nothing after it can be
+   closed either. */
+function stripComments(src){
+  if(src.indexOf("<!--")===-1) return src;
+  let out="", i=0;
+  for(;;){
+    const a=src.indexOf("<!--",i);
+    if(a===-1){ out+=src.slice(i); return out; }
+    const b=src.indexOf("-->",a+4);
+    if(b===-1){ out+=src.slice(i); return out; }
+    out+=src.slice(i,a);
+    i=b+3;
+  }
 }
 
 function render(src){
-  let lines = src
-    .replace(/<!--[\s\S]*?-->/g,"")   // HTML comments are hidden, as in real markdown
-    .replace(/\r\n?/g,"\n")
-    .split("\n");
+  let lines = stripComments(src).replace(/\r\n?/g,"\n").split("\n");
   // The outermost call owns the document context: it lifts every definition out
   // of the flow up front, so a reference resolves even when defined further down.
   const top=doc===null;
@@ -288,16 +421,21 @@ function renderLines(lines){
     // fenced code block. A ```mermaid fence becomes a placeholder that §3b fills
     // in asynchronously — the raw source rides along in data-mmd, and the code
     // block inside is the fallback shown before (or without) the library.
-    const fence=line.match(/^```(\S*)/);
-    if(fence){
+    // CommonMark allows either backticks or tildes, and up to three spaces of
+    // indent; the closing fence must use the same character and be at least as
+    // long as the opening one.
+    const fence=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if(fence && !(fence[1][0]==="`" && fence[2].includes("`"))){
+      const closer=new RegExp("^ {0,3}"+fence[1][0]+"{"+fence[1].length+",}\s*$");
       const code=[]; i++;
-      while(i<lines.length && !/^```/.test(lines[i])){ code.push(lines[i]); i++; }
+      while(i<lines.length && !closer.test(lines[i])){ code.push(lines[i]); i++; }
       i++;
       const body=code.join("\n");
       // the info string becomes a language- class for §3d (and for Turndown,
       // which reads it back when the preview is edited); anything that isn't a
       // plain language name is dropped rather than escaped
-      const lang=/^[\w+#-]+$/.test(fence[1]) ? fence[1].toLowerCase() : "";
+      const info=fence[2].trim().split(/\s+/)[0] || "";
+      const lang=/^[\w+#-]+$/.test(info) ? info.toLowerCase() : "";
       if(lang==="mermaid")
         html+=`<div class="mermaid-block" data-mmd="${attrValue(escapeHtml(body))}">`+
               `<pre><code>${escapeHtml(body)}</code></pre></div>`;
@@ -333,19 +471,33 @@ function renderLines(lines){
       html+=line; i++; continue;
     }
     // heading
-    const h=line.match(/^(#{1,6})\s+(.*)$/);
-    if(h){ html+=`<h${h[1].length}>${inline(escapeHtml(h[2]))}</h${h[1].length}>`; i++; continue; }
-    // setext heading: a plain text line underlined with === (h1) or --- (h2).
-    // The exclusion list keeps every other block construct out of this branch.
-    if(i+1<lines.length && /\S/.test(line) &&
-       !/^(#{1,6}\s|>|\s*([-*+]|\d+\.)\s|```|\s*\$\$|\s*<|\s*\|)/.test(line) &&
-       /^ {0,3}(=+|-+)\s*$/.test(lines[i+1])){
-      const tag=lines[i+1].trim()[0]==="=" ? "h1" : "h2";
-      html+=`<${tag}>${inline(escapeHtml(line.trim()))}</${tag}>`;
-      i+=2; continue;
+    /* Up to three spaces of indent are allowed, the text may be empty, and a
+       run of trailing #s is a closing sequence rather than part of the text. */
+    const h=line.match(/^ {0,3}(#{1,6})(?:[ 	]+(.*?))?[ 	]*$/);
+    if(h){
+      const text=(h[2]||"").replace(/(^|[ 	])#+[ 	]*$/,"");
+      html+=`<h${h[1].length}>${inline(escapeHtml(text.trim()))}</h${h[1].length}>`;
+      i++; continue;
     }
-    // horizontal rule
-    if(/^(\s*[-*_]){3,}\s*$/.test(line)){ html+="<hr>"; i++; continue; }
+    /* Thematic break, checked before both the setext underline and the list
+       so that "***" is a rule rather than a heading underline for the line
+       above it, and "* * *" is a rule rather than a one-item list. */
+    if(/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)){ html+="<hr>"; i++; continue; }
+    /* Setext heading: a run of text underlined with === (h1) or --- (h2).
+       The underline may follow several lines, and the whole run becomes the
+       heading. The exclusion list keeps other block constructs out. */
+    const notBlock=l=>!/^(#{1,6}\s|>|\s*([-*+]|\d+\.)\s|```|~~~|\s*\$\$|\s*<|\s*\|)/.test(l);
+    if(i+1<lines.length && /\S/.test(line) && notBlock(line)){
+      let n=i;
+      while(n<lines.length && /\S/.test(lines[n]) && notBlock(lines[n]) &&
+            !/^ {0,3}(=+|-+)\s*$/.test(lines[n])) n++;
+      if(n>i && n<lines.length && /^ {0,3}(=+|-+)\s*$/.test(lines[n])){
+        const tag=lines[n].trim()[0]==="=" ? "h1" : "h2";
+        const text=lines.slice(i,n).map(l=>l.trim()).join(" ");
+        html+=`<${tag}>${inline(escapeHtml(text))}</${tag}>`;
+        i=n+1; continue;
+      }
+    }
     // blockquote (collect consecutive lines)
     if(/^>\s?/.test(line)){
       const q=[];
@@ -353,27 +505,43 @@ function renderLines(lines){
       html+=`<blockquote>${render(q.join("\n"))}</blockquote>`;
       continue;
     }
-    // Table. GFM doesn't require the outer pipes ("a | b" over "--|--" is a
-    // table too), so the header just needs a pipe and the next line must be a
-    // well-formed delimiter row — whose own inner pipe keeps a plain --- (an
-    // hr or setext underline) from ever matching.
+    /* Table. GFM doesn't require the outer pipes ("a | b" over "--|--" is a
+       table too), so the header just needs a pipe and the next line must be a
+       well-formed delimiter row — whose own inner pipe keeps a plain --- (an
+       hr or setext underline) from ever matching. The delimiter row must have
+       exactly as many columns as the header, or it is not a table at all, and
+       body rows are padded or truncated to the header's width. */
     if(/\|/.test(line) && i+1<lines.length &&
        /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i+1]) &&
        lines[i+1].includes("|")){
-      const parseRow=r=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
-      // the delimiter row carries per-column alignment: :--- ---: :---:
-      const align=parseRow(lines[i+1]).map(d=>{
-        const l=d.startsWith(":"), r=d.endsWith(":");
-        return l&&r ? ' align="center"' : r ? ' align="right"' : l ? ' align="left"' : "";
-      });
-      const cell=(tag,c,n)=>`<${tag}${align[n]||""}>${inline(escapeHtml(c))}</${tag}>`;
-      const head=parseRow(line); i+=2; let body="";
-      while(i<lines.length && /\|/.test(lines[i]) && lines[i].trim()!==""){
-        body+="<tr>"+parseRow(lines[i]).map((c,n)=>cell("td",c,n)).join("")+"</tr>"; i++;
+      /* Split on pipes that are not escaped. A "\\|" inside a cell is a
+         literal pipe, which is how a table documents the pipe character. */
+      const parseRow=r=>r.trim().replace(/^\|/,"").replace(/(?<!\\)\|$/,"")
+        .split(/(?<!\\)\|/).map(c=>c.trim().replace(/\\\|/g,"|"));
+      const head=parseRow(line);
+      const delim=parseRow(lines[i+1]);
+      const wellFormed=delim.length===head.length &&
+                       delim.every(d=>/^:?-+:?$/.test(d));
+      if(!wellFormed){ /* not a table after all */ }
+      else{
+        // the delimiter row carries per-column alignment: :--- ---: :---:
+        const align=delim.map(d=>{
+          const l=d.startsWith(":"), r=d.endsWith(":");
+          return l&&r ? ' align="center"' : r ? ' align="right"' : l ? ' align="left"' : "";
+        });
+        const cell=(tag,c,n)=>`<${tag}${align[n]||""}>${inline(escapeHtml(c))}</${tag}>`;
+        i+=2;
+        let body="";
+        while(i<lines.length && /\|/.test(lines[i]) && lines[i].trim()!==""){
+          const cells=parseRow(lines[i]);
+          cells.length=head.length;                       // pad short rows, drop extra cells
+          body+="<tr>"+[...cells].map((c,n)=>cell("td",c===undefined?"":c,n)).join("")+"</tr>";
+          i++;
+        }
+        html+=`<table><thead><tr>${head.map((c,n)=>cell("th",c,n)).join("")}</tr></thead>`+
+              (body?`<tbody>${body}</tbody>`:"")+`</table>`;
+        continue;
       }
-      html+=`<table><thead><tr>${head.map((c,n)=>cell("th",c,n)).join("")}</tr></thead>`+
-            `<tbody>${body}</tbody></table>`;
-      continue;
     }
     // list — bullet or numbered, nested by indentation, GFM task items
     if(LIST_ITEM.test(line)){
@@ -397,10 +565,19 @@ function renderLines(lines){
     }
     // paragraph (collect until blank line or a block start)
     const para=[];
+    /* An ordered list only interrupts a paragraph when it starts at 1, so a
+       sentence that wraps onto "14. The number of doors is 6." stays one
+       paragraph instead of sprouting a list. Any number still starts a list at
+       a block boundary, where the paragraph loop is not running. */
     while(i<lines.length && !/^\s*$/.test(lines[i]) &&
-          !/^(#{1,6}\s|>|\s*[-*+]\s|\s*\d+\.\s|```|\s*\$\$|(\s*[-*_]){3,}\s*$)/.test(lines[i])){
+          !/^(#{1,6}\s|>|\s*[-*+]\s|\s*1\.\s|```|~~~|\s*\$\$|(\s*[-*_]){3,}\s*$)/.test(lines[i])){
       para.push(lines[i]); i++;
     }
+    /* Every branch above either consumes a line or falls through to here, so
+       this is the one place that guarantees the loop advances. A line that
+       looks like a block opener but was rejected by that block's own rules
+       (an unterminated "``` ```", say) would otherwise spin forever. */
+    if(!para.length){ para.push(lines[i]); i++; }
     // a backslash at the end of a line is a hard break (the "\" itself vanishes;
     // the newline it decorated becomes the <br> below like any other)
     html+=`<p>${inline(escapeHtml(para.join("\n").replace(/\\\n/g,"\n"))).replace(/\n/g,"<br>")}</p>`;
@@ -1251,12 +1428,10 @@ function update(){
 /* ============================================================
    4b. Undo history — one stack per open document
    ============================================================ */
-/* The browser keeps a single native undo stack per <textarea>, and assigning
-   editor.value wipes it. Switching documents does exactly that, so after a
-   switch Ctrl+Z had nothing left to undo — in any document. The only way to
-   give each document its own history is to stop relying on the native stack
-   and keep our own, which is what this does: snapshots of the text and the
-   caret, held per document id and never written to storage. */
+/* The browser keeps one native undo stack per <textarea>, and assigning
+   editor.value wipes it — which is what switching documents does. Giving each
+   document its own history therefore means not using that stack at all:
+   snapshots of the text and caret, held per document id, never persisted. */
 const histories=new Map();
 const UNDO_STEPS=200;          // entries per document
 const UNDO_CHARS=4_000_000;    // …and a total size ceiling, for large documents
@@ -1352,7 +1527,7 @@ afterUpdate.push(noteEdit);
 editor.value=getActiveDocument().content;
 beginHistory();
 renderExplorer();
-setExplorerOpen(localStorage.getItem(EXPLORER_KEY)!=="closed");
+setExplorerOpen(localStorage.getItem(EXPLORER_KEY)==="open");
 if(localStorage.getItem(THEME_KEY))
   document.documentElement.setAttribute("data-theme",localStorage.getItem(THEME_KEY));
 update();
@@ -1538,7 +1713,7 @@ preview.addEventListener("input",()=>{
    rebuilding the whole document through Turndown — a full round trip would
    reformat every list, table and rule in the file just because a box was
    ticked. Returns the new markdown, or null if the box couldn't be located. */
-const TASK_LINE=/^((?:\s*>\s?)*\s*(?:[-*+]|\d+\.)\s+\[)([ xX])(\]\s)/;
+const TASK_LINE=/^((?:\s*>\s?)*\s*(?:[-*+]|\d+\.)\s+\[)([ xX])(\](?:\s|$))/;
 function toggleTaskInMarkdown(index,checked){
   if(index<0) return null;
   const lines=editor.value.split("\n");
@@ -2338,6 +2513,24 @@ function toggleQuote(){
   else document.execCommand("formatBlock",false,"BLOCKQUOTE");
 }
 
+/* A checklist built from a selection should contain that selection. "Task" is
+   only the placeholder for when nothing is selected. A selection covering
+   several lines turns into one item per line, which is what you want after
+   picking out a few lines of notes. The text is escaped on the way in: it is
+   the user's own, but it is going through insertHTML. */
+function insertTaskList(){
+  const sel=window.getSelection();
+  const lines=(sel && !sel.isCollapsed ? sel.toString() : "")
+    .split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  if(!lines.length) lines.push("Task");
+  const items=lines.map(text=>{
+    const safe=escapeHtml(text);
+    return '<li class="task-item"><input type="checkbox" aria-label="'+
+           attrValue(safe)+'"> '+safe+"</li>";
+  }).join("");
+  document.execCommand("insertHTML",false,'<ul class="task-list">'+items+"</ul>");
+}
+
 function applyCmd(cmd){
   preview.focus();
   switch(cmd){
@@ -2350,9 +2543,7 @@ function applyCmd(cmd){
     case "quote":  toggleQuote(); break;
     case "ul":     document.execCommand("insertUnorderedList"); break;
     case "ol":     document.execCommand("insertOrderedList"); break;
-    case "task":   document.execCommand("insertHTML",false,
-                     '<ul class="task-list"><li class="task-item">'+
-                     '<input type="checkbox" aria-label="Task"> Task</li></ul>'); break;
+    case "task":   insertTaskList(); break;
     case "link":   addLink(); return; // async (styled modal) — handles its own sync
     case "table":  addTable(); return; // async (size modal) — handles its own sync
   }
